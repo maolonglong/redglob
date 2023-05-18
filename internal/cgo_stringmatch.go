@@ -43,9 +43,9 @@ static int stringmatchlen_impl(const char *pattern, int patternLen,
             return 0;
             break;
         case '?':
-			if (!stringLen) {
-				return 0;
-			}
+            if (!stringLen) {
+                return 0;
+            }
             string++;
             stringLen--;
             break;
@@ -66,14 +66,14 @@ static int stringmatchlen_impl(const char *pattern, int patternLen,
                     pattern++;
                     patternLen--;
                     if (pattern[0] == string[0]) {
-						if (!nocase) {
-							if (pattern[0] == string[0])
-								match = 1;
-						} else {
-							if (tolower((int)pattern[0]) == tolower((int)string[0]))
-								match = 1;
-						}
-					}
+                        if (!nocase) {
+                            if (pattern[0] == string[0])
+                                match = 1;
+                        } else {
+                            if (tolower((int)pattern[0]) == tolower((int)string[0]))
+                                match = 1;
+                        }
+                    }
                 } else if (pattern[0] == ']') {
                     break;
                 } else if (patternLen == 0) {
