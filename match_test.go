@@ -69,6 +69,34 @@ var tests = []struct {
 		true,
 	},
 	{
+		args{"abc", "a[^db]c"},
+		false,
+	},
+	{
+		args{"adc", "a[^db]c"},
+		false,
+	},
+	{
+		args{"azc", "a[^db]c"},
+		true,
+	},
+	{
+		args{"aac", "a[^a-c]c"},
+		false,
+	},
+	{
+		args{"abc", "a[^a-c]c"},
+		false,
+	},
+	{
+		args{"acc", "a[^a-c]c"},
+		false,
+	},
+	{
+		args{"azc", "a[^a-c]c"},
+		true,
+	},
+	{
 		args{"a三c", "a[一-五]c"},
 		true,
 	},

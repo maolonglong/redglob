@@ -37,6 +37,8 @@ import (
 //	'\\' c      matches character c
 //	'[abc]'     matches 'a' or 'b' or 'c'
 //	'[a-z]'     matches 'a' or 'b' or 'c' ... or 'z'
+//	'[^abc]'    not matches 'a' or 'b' or 'c'
+//	'[^a-z]'    not matches 'a' or 'b' or 'c' ... or 'z'
 func Match(str, pattern string) bool {
 	return stringmatch(str, pattern, false)
 }
