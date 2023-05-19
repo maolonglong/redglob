@@ -97,7 +97,7 @@ func stringmatch_impl(str, pattern string, nocase bool, skipLongerMatches *bool)
 			}
 			str = str[ss:]
 		case '[':
-			if ss == 0 || len(pattern) == 1 {
+			if ss == 0 || len(pattern) < 3 {
 				return false
 			}
 			pattern = pattern[1:]
@@ -108,10 +108,13 @@ func stringmatch_impl(str, pattern string, nocase bool, skipLongerMatches *bool)
 			matched := false
 			for {
 				if len(pattern) == 0 {
-					break
+					return false
 				}
 				pc, ps = decodeRune(pattern)
-				if pc == '\\' && len(pattern) > 1 {
+				if pc == '\\' {
+					if len(pattern) == 1 {
+						return false
+					}
 					pattern = pattern[ps:]
 					pc, ps = decodeRune(pattern)
 					if !nocase {
@@ -123,7 +126,7 @@ func stringmatch_impl(str, pattern string, nocase bool, skipLongerMatches *bool)
 					}
 				} else if pc == ']' {
 					break
-				} else if utf8.RuneCountInString(pattern) >= 3 && pattern[ps] == '-' {
+				} else if len(pattern) > ps+1 && pattern[ps] == '-' {
 					start := pc
 					pattern = pattern[ps+1:]
 					pc, ps = decodeRune(pattern)
@@ -161,10 +164,11 @@ func stringmatch_impl(str, pattern string, nocase bool, skipLongerMatches *bool)
 			}
 			str = str[ss:]
 		case '\\':
-			if len(pattern) > 1 {
-				pattern = pattern[1:]
-				pc, ps = decodeRune(pattern)
+			if len(pattern) == 1 {
+				return false
 			}
+			pattern = pattern[1:]
+			pc, ps = decodeRune(pattern)
 			fallthrough
 		default:
 			if ss == 0 {
@@ -180,9 +184,7 @@ func stringmatch_impl(str, pattern string, nocase bool, skipLongerMatches *bool)
 			str = str[ss:]
 		}
 
-		if len(pattern) > 0 {
-			pattern = pattern[ps:]
-		}
+		pattern = pattern[ps:]
 		if len(str) == 0 {
 			for len(pattern) > 0 && pattern[0] == '*' {
 				pattern = pattern[1:]

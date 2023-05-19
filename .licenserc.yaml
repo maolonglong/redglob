@@ -33,10 +33,12 @@ header:
 
   paths-ignore:
     - 'licenses'
+    - 'testdata'
     - '**/*.md'
     - '**/go.mod'
     - '**/go.sum'
     - 'LICENSE'
+    - '.gitignore'
 
   comment: on-failure
 

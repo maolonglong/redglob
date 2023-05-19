@@ -104,6 +104,18 @@ var tests = []struct {
 		args{"abc-🚀-emoji", `a*\-🚀\-em*`},
 		true,
 	},
+	{
+		args{"a", "[]"},
+		false,
+	},
+	{
+		args{"a", "["},
+		false,
+	},
+	{
+		args{"a", "[^]"},
+		true,
+	},
 }
 
 func TestMatch(t *testing.T) {
@@ -189,5 +201,5 @@ func allow(s string) bool {
 			return false
 		}
 	}
-	return !strings.Contains(s, "[^]")
+	return true
 }

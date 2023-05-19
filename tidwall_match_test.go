@@ -69,7 +69,7 @@ func TestMatch_tidwall(t *testing.T) {
 	if !Match("的情况下解析一个", "的情况?解析一个") {
 		t.Fatal("fail")
 	}
-	if !Match("hello world\\", "hello world\\") {
+	if Match("hello world\\", "hello world\\") {
 		t.Fatal("fail")
 	}
 }
