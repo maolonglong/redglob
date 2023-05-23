@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package redglob provides a simple pattern matcher with unicode support. (Go implementation of Redis's glob-style pattern matching)
+// Package redglob implements a simple pattern matcher with Unicode support.
+// It provides a Go implementation of Redis's glob-style pattern matching.
 package redglob // import "go.chensl.me/redglob"
 
 import (
@@ -21,11 +22,12 @@ import (
 	"unsafe"
 )
 
-// Match returns true if str matches pattern. This is a very
-// simple wildcard match where '*' matches on any number characters
-// and '?' matches on any one character.
+// Match checks whether the input string `str` matches the pattern `pattern`.
+// This function uses a simple wildcard matching algorithm where '*' matches
+// any number of characters and '?' matches any single character.
+// The function returns true if `str` matches `pattern`, and false otherwise.
 //
-// pattern:
+// The pattern syntax is as follows:
 //
 //	{ term }
 //
@@ -36,24 +38,29 @@ import (
 //	c           matches character c (c != '*', '?', '\\')
 //	'\\' c      matches character c
 //	'[abc]'     matches 'a' or 'b' or 'c'
-//	'[a-z]'     matches 'a' or 'b' or 'c' ... or 'z'
-//	'[^abc]'    not matches 'a' or 'b' or 'c'
-//	'[^a-z]'    not matches 'a' or 'b' or 'c' ... or 'z'
+//	'[a-z]'     matches characters 'a' to 'z'
+//	'[^abc]'    matches any character except 'a', 'b', or 'c'
+//	'[^a-z]'    matches any character except 'a' to 'z'
 func Match(str, pattern string) bool {
 	return stringmatch(str, pattern, false)
 }
 
-// MatchFold is case-insensitive Match.
+// MatchFold is a case-insensitive version of the Match function.
+// This function is similar to Match, but it ignores the case of the characters
+// in `str` and `pattern` when checking for a match.
 func MatchFold(str, pattern string) bool {
 	return stringmatch(str, pattern, true)
 }
 
-// MatchBytes is the same as Match, but it receives bytes.
+// MatchBytes is similar to Match, but it receives a byteslice instead of a string as input.
+// This function converts the byte slice to a string and then calls the Match function.
 func MatchBytes(b []byte, pattern string) bool {
 	return Match(unsafe.String(unsafe.SliceData(b), len(b)), pattern)
 }
 
-// MatchBytesFold is case-insensitive MatchBytes.
+// MatchBytesFold is a case-insensitive version of the MatchBytes function.
+// This function is similar to MatchBytes, but it ignores the case of the characters
+// in the byte slice and `pattern` when checking for a match.
 func MatchBytesFold(b []byte, pattern string) bool {
 	return MatchFold(unsafe.String(unsafe.SliceData(b), len(b)), pattern)
 }
