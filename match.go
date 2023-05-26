@@ -19,7 +19,6 @@ package redglob // import "go.chensl.me/redglob"
 import (
 	"unicode"
 	"unicode/utf8"
-	"unsafe"
 )
 
 // Match checks whether the input string `str` matches the pattern `pattern`.
@@ -55,14 +54,14 @@ func MatchFold(str, pattern string) bool {
 // MatchBytes is similar to Match, but it receives a byteslice instead of a string as input.
 // This function converts the byte slice to a string and then calls the Match function.
 func MatchBytes(b []byte, pattern string) bool {
-	return Match(unsafe.String(unsafe.SliceData(b), len(b)), pattern)
+	return Match(b2s(b), pattern)
 }
 
 // MatchBytesFold is a case-insensitive version of the MatchBytes function.
 // This function is similar to MatchBytes, but it ignores the case of the characters
 // in the byte slice and `pattern` when checking for a match.
 func MatchBytesFold(b []byte, pattern string) bool {
-	return MatchFold(unsafe.String(unsafe.SliceData(b), len(b)), pattern)
+	return MatchFold(b2s(b), pattern)
 }
 
 func stringmatch(str, pattern string, nocase bool) bool {
