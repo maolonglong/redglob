@@ -17,10 +17,9 @@
 package redglob
 
 import (
-	"math/rand"
+	"crypto/rand"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestMatch_tidwall(t *testing.T) {
@@ -388,14 +387,13 @@ func TestWildcardMatch_tidwall(t *testing.T) {
 }
 
 func TestRandomInput_tidwall(t *testing.T) {
-	rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
 	b1 := make([]byte, 100)
 	b2 := make([]byte, 100)
 	for i := 0; i < 1000000; i++ {
-		if _, err := rnd.Read(b1); err != nil {
+		if _, err := rand.Read(b1); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := rnd.Read(b2); err != nil {
+		if _, err := rand.Read(b2); err != nil {
 			t.Fatal(err)
 		}
 		Match(string(b1), string(b2))
@@ -418,7 +416,7 @@ func BenchmarkUnicode(t *testing.B) {
 	}
 }
 
-func TestLotsaStars_tidwall(t *testing.T) {
+func TestLotsaStars_tidwall(_ *testing.T) {
 	// This tests that a pattern with lots of stars will complete quickly.
 	var str, pat string
 
@@ -427,8 +425,8 @@ func TestLotsaStars_tidwall(t *testing.T) {
 		`**,**,"",**,**,**,**,**,**,**,**,**,**]`
 	Match(pat, str)
 
-	str = strings.Replace(str, ",", "情", -1)
-	pat = strings.Replace(pat, ",", "情", -1)
+	str = strings.ReplaceAll(str, ",", "情")
+	pat = strings.ReplaceAll(pat, ",", "情")
 	Match(pat, str)
 
 	str = strings.Repeat("hello", 100)

@@ -166,6 +166,6 @@ int stringmatch(const char *pattern, const char *string, int nocase) {
 */
 import "C"
 
-func CGO_stringmatch(str, pattern string) bool {
+func OriginStringMatch(str, pattern string) bool {
 	return int(C.stringmatch(C.CString(pattern), C.CString(str), C.int(0))) == 1
 }

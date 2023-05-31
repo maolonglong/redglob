@@ -66,10 +66,10 @@ func MatchBytesFold(b []byte, pattern string) bool {
 
 func stringmatch(str, pattern string, nocase bool) bool {
 	skipLongerMatches := false
-	return stringmatch_impl(str, pattern, nocase, &skipLongerMatches)
+	return stringmatchImpl(str, pattern, nocase, &skipLongerMatches)
 }
 
-func stringmatch_impl(str, pattern string, nocase bool, skipLongerMatches *bool) bool {
+func stringmatchImpl(str, pattern string, nocase bool, skipLongerMatches *bool) bool {
 	for len(pattern) > 0 {
 		pc, ps := decodeRune(pattern)
 		var sc rune
@@ -86,7 +86,7 @@ func stringmatch_impl(str, pattern string, nocase bool, skipLongerMatches *bool)
 				return true
 			}
 			for len(str) > 0 {
-				if stringmatch_impl(str, pattern[1:], nocase, skipLongerMatches) {
+				if stringmatchImpl(str, pattern[1:], nocase, skipLongerMatches) {
 					return true
 				}
 				if *skipLongerMatches {
@@ -139,9 +139,7 @@ func stringmatch_impl(str, pattern string, nocase bool, skipLongerMatches *bool)
 					end := pc
 					c := sc
 					if start > end {
-						tmp := start
-						start = end
-						end = tmp
+						start, end = end, start
 					}
 					if nocase {
 						start = unicode.ToLower(start)

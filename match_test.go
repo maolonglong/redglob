@@ -188,7 +188,7 @@ func FuzzMatch(f *testing.F) {
 			return
 		}
 		got := Match(str, pattern)
-		want := internal.CGO_stringmatch(str, pattern)
+		want := internal.OriginStringMatch(str, pattern)
 		if got != want {
 			t.Errorf("Match(%q, %q) = %v, want %v", str, pattern, got, want)
 		}
