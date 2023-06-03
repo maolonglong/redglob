@@ -10,12 +10,10 @@ Redglob is a simple glob-style pattern matcher library for Go, inspired by Redis
 
 - Unicode support
 - Case-insensitive matching
-- Matching strings and byte slices
+- Capability to match strings and byte slices
 - Supports `*`, `?`, character classes `[abc]`, ranges `[a-z]`, and negation `[^abc]`
 
 ## Installing
-
-To install Redglob, use `go get`:
 
 ```bash
 go get go.chensl.me/redglob
@@ -46,14 +44,14 @@ func main() {
 
 ## Functions
 
-- `Match(str, pattern string) bool`: returns true if str matches pattern.
-- `MatchFold(str, pattern string) bool`: case-insensitive version of Match.
-- `MatchBytes(b []byte, pattern string) bool`: same as Match, but accepts a byte slice instead of a string.
-- `MatchBytesFold(b []byte, pattern string) bool`: case-insensitive version of MatchBytes.
+- `Match(str, pattern string) bool`: returns true if the given string matches the pattern.
+- `MatchFold(str, pattern string) bool`: case-insensitive version of `Match`.
+- `MatchBytes(b []byte, pattern string) bool`: similar to `Match`, but accepts a byte slice instead of a string.
+- `MatchBytesFold(b []byte, pattern string) bool`: case-insensitive version of `MatchBytes`.
 
 ## Syntax
 
-The pattern syntax supported by redglob is similar to that of Redis's glob command:
+Redglob's pattern syntax is similar to that of Redis's `KEYS` command:
 
 - `*` matches any sequence of non-Separator characters
 - `?` matches any single non-Separator character
@@ -64,16 +62,10 @@ The pattern syntax supported by redglob is similar to that of Redis's glob comma
 - `[a-z]` matches `a` to `z`
 - `[^a-z]` matches any character except `a` to `z`
 
-In addition, redglob supports Unicode characters. When performing a case-insensitive match with MatchFold or MatchBytesFold, the matching is performed using Unicode case-folding, which takes into account complex case mappings in the Unicode standard.
-
 ## Performance
 
-redglob is implemented in pure Go and is optimized for performance. It uses a simple and efficient algorithm to match patterns against strings, and takes advantage of Go's built-in Unicode support to handle Unicode characters correctly.
+Redglob is implemented in pure Go and is optimized for performance. It uses a simple and efficient algorithm to match patterns against strings, and takes advantage of Go's built-in Unicode support to handle Unicode characters correctly.
 
 ## License
 
 Redglob is licensed under the Apache License, Version 2.0. See the [LICENSE file](LICENSE) for details.
-
-## Acknowledgments
-
-redglob is inspired by Redis's glob command, which provides similar pattern matching functionality.
