@@ -3,6 +3,7 @@
 [![PkgGoDev](https://pkg.go.dev/badge/go.chensl.me/redglob)](https://pkg.go.dev/go.chensl.me/redglob)
 [![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/maolonglong/redglob/go.yml?label=ci)](https://github.com/maolonglong/redglob/actions/workflows/go.yml)
 [![Codecov](https://img.shields.io/codecov/c/github/maolonglong/redglob/main?logo=codecov)](https://codecov.io/gh/maolonglong/redglob)
+[![GoReportCard](https://goreportcard.com/badge/go.chensl.me/redglob)](https://goreportcard.com/report/go.chensl.me/redglob)
 
 Redglob is a simple glob-style pattern matcher library for Go, inspired by Redis's pattern matching implementation. It provides a fast and easy-to-use solution for matching strings and byte slices against patterns with wildcard support.
 

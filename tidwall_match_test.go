@@ -22,6 +22,7 @@ import (
 	"testing"
 )
 
+//gocyclo:ignore
 func TestMatch_tidwall(t *testing.T) {
 	if !Match("hello world", "hello world") {
 		t.Fatal("fail")

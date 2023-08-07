@@ -69,6 +69,7 @@ func stringmatch(str, pattern string, nocase bool) bool {
 	return stringmatchImpl(str, pattern, nocase, &skipLongerMatches)
 }
 
+//gocyclo:ignore
 func stringmatchImpl(str, pattern string, nocase bool, skipLongerMatches *bool) bool {
 	for len(pattern) > 0 {
 		pc, ps := decodeRune(pattern)
