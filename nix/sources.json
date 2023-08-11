@@ -1,0 +1,50 @@
+{
+    "gofumpt": {
+        "branch": "master",
+        "description": "A stricter gofmt",
+        "homepage": "https://pkg.go.dev/mvdan.cc/gofumpt",
+        "owner": "mvdan",
+        "repo": "gofumpt",
+        "rev": "v0.5.0",
+        "sha256": "1nsajwxy3w6bbcw45ggfn3ip2m7di9zsb2vm5lq04s201hp8dfyx",
+        "type": "tarball",
+        "url": "https://github.com/mvdan/gofumpt/archive/v0.5.0.tar.gz",
+        "url_template": "https://github.com/<owner>/<repo>/archive/<rev>.tar.gz"
+    },
+    "gosimports": {
+        "branch": "main",
+        "description": "alias goimports='gosimports'",
+        "homepage": "https://pkg.go.dev/github.com/rinchsan/gosimports",
+        "owner": "rinchsan",
+        "repo": "gosimports",
+        "rev": "v0.3.8",
+        "sha256": "0lzcrz5m2c8mjfx6yl6ya02wwmpz0nkrp4gd6x3ya1qldwcl5kf4",
+        "type": "tarball",
+        "url": "https://github.com/rinchsan/gosimports/archive/v0.3.8.tar.gz",
+        "url_template": "https://github.com/<owner>/<repo>/archive/<rev>.tar.gz"
+    },
+    "nixpkgs": {
+        "branch": "nixpkgs-unstable",
+        "description": "Nix Packages collection",
+        "homepage": null,
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "4d2389b927696ef8da4ef76b03f2d306faf87929",
+        "sha256": "03pwg5mvfjfr7inhfq8k0rlq2j93pdx5ggagq74kc73vdvc3mi8l",
+        "type": "tarball",
+        "url": "https://github.com/NixOS/nixpkgs/archive/4d2389b927696ef8da4ef76b03f2d306faf87929.tar.gz",
+        "url_template": "https://github.com/<owner>/<repo>/archive/<rev>.tar.gz"
+    },
+    "skywalking-eyes": {
+        "branch": "main",
+        "description": "A full-featured license tool to check and fix license headers and resolve dependencies' licenses.",
+        "homepage": "https://skywalking.apache.org/",
+        "owner": "apache",
+        "repo": "skywalking-eyes",
+        "rev": "v0.4.0",
+        "sha256": "07cz8wralzkzf65x5jplzkhdlh9ggpb0qg94q1pd27jddha65ay6",
+        "type": "tarball",
+        "url": "https://github.com/apache/skywalking-eyes/archive/v0.4.0.tar.gz",
+        "url_template": "https://github.com/<owner>/<repo>/archive/<rev>.tar.gz"
+    }
+}

@@ -39,6 +39,10 @@ header:
     - '**/go.sum'
     - 'LICENSE'
     - '.gitignore'
+    - 'tidwall_match_test.go'
+    - '.envrc'
+    - 'nix'
+    - 'shell.nix'
 
   comment: on-failure
 
