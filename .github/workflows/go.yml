@@ -40,7 +40,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v3
         with:
@@ -82,7 +82,7 @@ jobs:
         with:
           go-version: ${{ matrix.go-version }}
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       - name: Run tests
         run: go test -shuffle=on -v -race -count=1 -coverprofile=coverage -covermode=atomic ./...
       - name: Upload coverage report to Codecov
