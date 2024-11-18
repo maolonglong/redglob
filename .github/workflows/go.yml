@@ -72,7 +72,7 @@ jobs:
       - name: Run tests
         run: go test -shuffle=on -v -race -count=1 -coverprofile=coverage -covermode=atomic ./...
       - name: Upload coverage report to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5
         with:
           file: ./coverage
           flags: unittests
