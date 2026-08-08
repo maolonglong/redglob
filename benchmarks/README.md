@@ -1,37 +1,45 @@
 # Comparison benchmarks
 
-This directory is a separate Go module so benchmark-only dependencies never enter redglob's
-`go.mod` or its users' dependency graphs. All compared libraries are pure Go and have no
-third-party runtime dependencies:
+Separate Go module used only for comparing redglob with other matchers. Keeping it isolated means benchmark dependencies never show up in redglob's own `go.mod`.
 
-- `github.com/tidwall/match`: closest one-shot flat-string matcher; no character classes.
-- `github.com/gobwas/glob`: compile-once matcher; dormant but widely used.
-- `github.com/bmatcuk/doublestar/v4`: actively maintained path matcher; compared only on inputs
-  without `/`, where its semantics overlap.
-- `path.Match`: standard-library baseline.
+## Libraries compared
 
-The suites intentionally separate one-shot matching, compilation cost, and compiled steady-state
-matching. Negated classes, paths, malformed patterns, and non-ASCII case folding are excluded from
-cross-library rankings because their semantics differ. Unicode `?` matching is reported separately
-without gobwas/glob: although its single-rune matcher decodes UTF-8, its combined fixed-length
-optimization makes `a?b` fail to match `a界b`.
+| Library | Role in the suite |
+| --- | --- |
+| [`tidwall/match`](https://github.com/tidwall/match) | Closest one-shot flat-string matcher (no character classes) |
+| [`gobwas/glob`](https://github.com/gobwas/glob) | Compile-once matcher; still widely used |
+| [`doublestar/v4`](https://github.com/bmatcuk/doublestar) | Path-oriented matcher; only compared on inputs without `/` |
+| [`path.Match`](https://pkg.go.dev/path#Match) | Standard-library baseline |
 
-Run the benchmarks without Cgo:
+All of the above are pure Go with no third-party runtime dependencies.
+
+## What is (and isn't) measured
+
+The suite splits three costs on purpose:
+
+1. One-shot matching (compile + match together, or match-only APIs)
+2. Compilation cost
+3. Steady-state matching on an already compiled pattern
+
+Cross-library rankings skip cases where semantics diverge: negated classes, path separators, malformed patterns, and non-ASCII case folding.
+
+Unicode `?` matching is reported in its own set of benches and omits gobwas/glob. Its fixed-length optimization treats `?` as one byte in some paths, so `a?b` does not match `a界b` the way redglob does.
+
+## Running
+
+From this directory, with Cgo disabled:
 
 ```sh
-cd benchmarks
 CGO_ENABLED=0 go test -run '^$' -bench . -benchmem -count 5
 ```
 
-For statistically useful before/after comparisons, save outputs and analyze them with `benchstat`.
+For before/after comparisons, save the outputs and feed them to [`benchstat`](https://pkg.go.dev/golang.org/x/perf/cmd/benchstat).
 
-To compare the scalar and experimental SIMD paths using a Go 1.27+ toolchain:
+### Scalar vs experimental SIMD
+
+Requires a Go 1.27+ toolchain. `BenchmarkMatchFoldASCIILength` covers both short and long inputs (SIMD only helps past a length threshold). `BenchmarkLongMultiStar` measures multi-segment literal search on its own.
 
 ```sh
 go test -run '^$' -bench BenchmarkMatchFoldASCIILength -benchmem -count 5
 GOEXPERIMENT=simd go test -run '^$' -bench BenchmarkMatchFoldASCIILength -benchmem -count 5
 ```
-
-`BenchmarkMatchFoldASCIILength` includes short and long inputs because SIMD setup is not beneficial
-for small comparisons. `BenchmarkLongMultiStar` measures literal-segment searching independently
-from the case-folding optimization.

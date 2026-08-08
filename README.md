@@ -3,25 +3,16 @@
 [![PkgGoDev](https://pkg.go.dev/badge/github.com/maolonglong/redglob)](https://pkg.go.dev/github.com/maolonglong/redglob)
 [![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/maolonglong/redglob/go.yml?label=ci)](https://github.com/maolonglong/redglob/actions/workflows/go.yml)
 [![Codecov](https://img.shields.io/codecov/c/github/maolonglong/redglob/main?logo=codecov)](https://codecov.io/gh/maolonglong/redglob)
-[![GoReportCard](https://goreportcard.com/badge/github.com/maolonglong/redglob)](https://goreportcard.com/report/github.com/maolonglong/redglob)
 
-Redglob is a simple glob-style pattern matcher library for Go, inspired by Redis's pattern matching implementation. It provides a fast and easy-to-use solution for matching strings and byte slices against patterns with wildcard support.
+Redglob is a Redis-style glob matcher for Go. It matches strings and byte slices against patterns with `*`, `?`, and character classes, with full Unicode support and optional case-insensitive matching. Pure Go, no third-party dependencies, no Cgo.
 
-## Features
-
-- Unicode support
-- Case-insensitive matching
-- Capability to match strings and byte slices
-- Supports `*`, `?`, character classes `[abc]`, ranges `[a-z]`, and negation `[^abc]`
-- Zero third-party dependencies and no Cgo
-
-## Installing
+## Install
 
 ```bash
 go get github.com/maolonglong/redglob
 ```
 
-## Usage
+## Quick start
 
 ```go
 package main
@@ -33,63 +24,66 @@ import (
 )
 
 func main() {
-	pattern := redglob.Compile("h?ll*")
+	// One-off match
+	fmt.Println(redglob.Match("hello, world!", "h?ll*")) // true
 
-	if pattern.Match("hello, world!") {
-		fmt.Println("Match!")
-	} else {
-		fmt.Println("No match.")
-	}
+	// Compile once when reusing the same pattern
+	p := redglob.Compile("user:[0-9]*")
+	fmt.Println(p.Match("user:42"))   // true
+	fmt.Println(p.Match("admin:42"))  // false
 }
 ```
 
-## Functions
+## API
 
-- `Match(str, pattern string) bool`: returns true if the given string matches the pattern.
-- `MatchFold(str, pattern string) bool`: case-insensitive version of `Match`.
-- `MatchBytes(b []byte, pattern string) bool`: similar to `Match`, but accepts a byte slice instead of a string.
-- `MatchBytesFold(b []byte, pattern string) bool`: case-insensitive version of `MatchBytes`.
-- `Compile(pattern string) *Pattern`: compiles a pattern for repeated, concurrency-safe matching.
+| Function | Description |
+| --- | --- |
+| `Match(str, pattern string) bool` | Match a string against a pattern |
+| `MatchFold(str, pattern string) bool` | Case-insensitive `Match` |
+| `MatchBytes(b []byte, pattern string) bool` | Match a byte slice |
+| `MatchBytesFold(b []byte, pattern string) bool` | Case-insensitive `MatchBytes` |
+| `Compile(pattern string) *Pattern` | Compile a pattern for repeated, concurrency-safe matching |
 
-Compiled patterns provide `Match`, `MatchFold`, `MatchBytes`, and `MatchBytesFold` methods. Use
-the package-level functions for one-off matches and `Compile` when the same pattern is reused.
+A compiled `*Pattern` exposes the same four methods: `Match`, `MatchFold`, `MatchBytes`, and `MatchBytesFold`.
 
-## Syntax
+Prefer the package-level functions for one-off checks; use `Compile` when the same pattern is applied many times.
 
-Redglob's pattern syntax is similar to that of Redis's `KEYS` command:
+## Pattern syntax
 
-- `*` matches any sequence of non-Separator characters
-- `?` matches any single non-Separator character
-- `c` matches character `c` (where `c` is any character except `*`, `?`, and `\`)
-- `\c` matches character `c`
-- `[abc]` matches `a` or `b` or `c`
-- `[^abc]` matches any character except `a`, `b`, or `c`
-- `[a-z]` matches `a` to `z`
-- `[^a-z]` matches any character except `a` to `z`
+Syntax follows Redis `KEYS` / `SCAN` glob patterns:
+
+| Pattern | Meaning |
+| --- | --- |
+| `*` | Any sequence of characters (including empty) |
+| `?` | Any single character |
+| `c` | The character `c` (except `*`, `?`, `\`) |
+| `\c` | Escaped character `c` |
+| `[abc]` | One of `a`, `b`, or `c` |
+| `[^abc]` | Any character except `a`, `b`, or `c` |
+| `[a-z]` | Inclusive range from `a` to `z` |
+| `[^a-z]` | Any character outside that range |
+
+Patterns are flat-string globs, not path globs: `*` and `?` do not treat `/` specially.
+
+Invalid patterns (for example an unclosed `[`) never match, both for the one-shot helpers and for `Compile`.
 
 ## Performance
 
-Redglob is implemented in pure Go and is optimized for performance. It uses a simple and efficient algorithm to match patterns against strings, and takes advantage of Go's built-in Unicode support to handle Unicode characters correctly.
+Redglob is written in pure Go and tuned for common cases (literal prefixes/suffixes, simple `*` patterns, and longer multi-segment patterns).
 
-Cross-library benchmarks live in the isolated [`benchmarks`](benchmarks) module. Benchmark-only
-dependencies never enter redglob's module graph; see its README for methodology and commands.
+Cross-library comparisons live in a separate [`benchmarks`](benchmarks) module so benchmark-only dependencies stay out of redglob's `go.mod`. See that directory's README for how to run them.
 
-### Experimental SIMD
+### Experimental SIMD (Go 1.27+)
 
-Go 1.27 adds an experimental, portable `simd` package. When redglob is built with a Go 1.27+
-toolchain and `GOEXPERIMENT=simd`, long ASCII case-insensitive literal and prefix comparisons use
-that package. Short or non-ASCII comparisons continue through the scalar/Unicode implementation.
+With a Go 1.27+ toolchain and `GOEXPERIMENT=simd`, long ASCII case-insensitive literal/prefix comparisons can use Go's experimental portable `simd` package. Short and non-ASCII inputs still use the scalar path.
 
 ```sh
 GOEXPERIMENT=simd go test ./...
 GOEXPERIMENT=simd go build ./...
 ```
 
-SIMD remains disabled by default and the module's `go 1.26` directive is unchanged. Users do not
-gain dependencies, Cgo, new API requirements, or special build settings unless they explicitly
-enable the experiment. Since Go's SIMD API is not yet stable, this path may change before a future
-Go release makes it generally available.
+SIMD is off by default. The module still declares `go 1.26`, and enabling the experiment does not add dependencies, Cgo, or API changes. Go's SIMD API is not stable yet, so this path may change in a future Go release.
 
 ## License
 
-Redglob is licensed under the Apache License, Version 2.0. See the [LICENSE file](LICENSE) for details.
+Apache License 2.0. See [LICENSE](LICENSE).

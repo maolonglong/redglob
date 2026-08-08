@@ -19,8 +19,8 @@ import (
 //
 // term:
 //
-//	'*'         matches any sequence of non-Separator characters
-//	'?'         matches any single non-Separator character
+//	'*'         matches any sequence of characters
+//	'?'         matches any single character
 //	c           matches character c (c != '*', '?', '\\')
 //	'\\' c      matches character c
 //	'[abc]'     matches 'a' or 'b' or 'c'
