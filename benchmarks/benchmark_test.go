@@ -8,8 +8,9 @@ import (
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/gobwas/glob"
-	"github.com/maolonglong/redglob"
 	tidwall "github.com/tidwall/match"
+
+	"github.com/maolonglong/redglob"
 )
 
 var (
