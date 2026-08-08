@@ -2,6 +2,8 @@
 
 Separate Go module used only for comparing redglob with other matchers. Keeping it isolated means benchmark dependencies never show up in redglob's own `go.mod`.
 
+Published numbers and a feature comparison live in the root [README](../README.md#comparison).
+
 ## Libraries compared
 
 | Library | Role in the suite |
