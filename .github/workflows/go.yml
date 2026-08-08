@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -105,3 +106,4 @@ jobs:
           disable_search: true
           fail_ci_if_error: true
           flags: unittests
+          use_oidc: true
