@@ -3,6 +3,7 @@
 package redglob // import "github.com/maolonglong/redglob"
 
 import (
+	"strings"
 	"unicode"
 	"unicode/utf8"
 )
@@ -27,6 +28,26 @@ import (
 //	'[^abc]'    matches any character except 'a', 'b', or 'c'
 //	'[^a-z]'    matches any character except 'a' to 'z'
 func Match(str, pattern string) bool {
+	if str == pattern && !strings.ContainsAny(pattern, `[\`) {
+		return true
+	}
+	if prefix, suffix, hasStar, ok := splitSimplePattern(pattern); ok {
+		if !hasStar {
+			return str == prefix
+		}
+		return matchSimple(str, prefix, suffix)
+	}
+	if len(str) >= 64 {
+		if matches, ok := matchLiteralStars(str, pattern); ok {
+			return matches
+		}
+	}
+	if starEnd, suffix, ok := splitFixedSuffix(pattern); ok {
+		if !strings.HasSuffix(str, suffix) {
+			return false
+		}
+		return stringmatch(str[:len(str)-len(suffix)], pattern[:starEnd], false)
+	}
 	return stringmatch(str, pattern, false)
 }
 
@@ -34,6 +55,19 @@ func Match(str, pattern string) bool {
 // This function is similar to Match, but it ignores the case of the characters
 // in `str` and `pattern` when checking for a match.
 func MatchFold(str, pattern string) bool {
+	if prefix, suffix, hasStar, ok := splitSimplePattern(pattern); ok {
+		if !hasStar {
+			return matchLiteralFold(str, prefix)
+		}
+		return matchSimpleFold(str, prefix, suffix)
+	}
+	if starEnd, suffix, ok := splitFixedSuffix(pattern); ok {
+		suffixStart, matches := matchSuffixFold(str, suffix)
+		if !matches {
+			return false
+		}
+		return stringmatch(str[:suffixStart], pattern[:starEnd], true)
+	}
 	return stringmatch(str, pattern, true)
 }
 
@@ -114,7 +148,7 @@ func stringmatchImpl(str, pattern string, nocase bool, skipLongerMatches *bool) 
 						if pc == sc {
 							matched = true
 						}
-					} else if unicode.ToLower(pc) == unicode.ToLower(sc) {
+					} else if lowerRune(pc) == lowerRune(sc) {
 						matched = true
 					}
 				} else if pc == ']' {
@@ -129,9 +163,9 @@ func stringmatchImpl(str, pattern string, nocase bool, skipLongerMatches *bool) 
 						start, end = end, start
 					}
 					if nocase {
-						start = unicode.ToLower(start)
-						end = unicode.ToLower(end)
-						c = unicode.ToLower(c)
+						start = lowerRune(start)
+						end = lowerRune(end)
+						c = lowerRune(c)
 					}
 					if c >= start && c <= end {
 						matched = true
@@ -141,7 +175,7 @@ func stringmatchImpl(str, pattern string, nocase bool, skipLongerMatches *bool) 
 						if pc == sc {
 							matched = true
 						}
-					} else if unicode.ToLower(pc) == unicode.ToLower(sc) {
+					} else if lowerRune(pc) == lowerRune(sc) {
 						matched = true
 					}
 				}
@@ -169,7 +203,7 @@ func stringmatchImpl(str, pattern string, nocase bool, skipLongerMatches *bool) 
 				if pc != sc {
 					return false
 				}
-			} else if unicode.ToLower(pc) != unicode.ToLower(sc) {
+			} else if lowerRune(pc) != lowerRune(sc) {
 				return false
 			}
 			str = str[ss:]
@@ -193,4 +227,14 @@ func decodeRune(s string) (rune, int) {
 		r, size = utf8.DecodeRuneInString(s)
 	}
 	return r, size
+}
+
+func lowerRune(r rune) rune {
+	if r <= unicode.MaxASCII {
+		if r >= 'A' && r <= 'Z' {
+			return r + ('a' - 'A')
+		}
+		return r
+	}
+	return unicode.ToLower(r)
 }

@@ -6,14 +6,10 @@ default:
 
 # install dev tools
 deps:
-  go install github.com/segmentio/golines@latest
-  go install mvdan.cc/gofumpt@latest
-  go install github.com/rinchsan/gosimports/cmd/gosimports@latest
-  go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+  version="$(cat .golangci-lint-version)"; curl --fail --silent --show-error --location "https://raw.githubusercontent.com/golangci/golangci-lint/$version/install.sh" | sh -s -- -b "$(go env GOPATH)/bin" "$version"
 
 fmt:
-  gosimports -local github.com/maolonglong -w .
-  golines --max-len=99 --base-formatter="gofumpt -extra" -w .
+  golangci-lint fmt
 
 fuzz:
   go test -fuzz=Fuzz .

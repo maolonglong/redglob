@@ -3,6 +3,8 @@ set -euo pipefail
 
 readonly GO_VERSION="1.26.5"
 readonly GO_SHA256="5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053"
+readonly REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+readonly GOLANGCI_LINT_VERSION="$(<"$REPO_ROOT/.golangci-lint-version")"
 readonly GO_ROOT="$HOME/.local/share/go/$GO_VERSION"
 readonly BIN_DIR="$HOME/.local/bin"
 
@@ -33,5 +35,16 @@ echo "[setup] Downloading Go modules"
 "$GO_ROOT/bin/go" mod download
 echo "[setup] Go modules ready in $((SECONDS - step_started))s"
 
+step_started=$SECONDS
+echo "[setup] Ensuring golangci-lint $GOLANGCI_LINT_VERSION is installed"
+if [[ ! -x "$BIN_DIR/golangci-lint" ]] ||
+  ! "$BIN_DIR/golangci-lint" version | grep -q "version ${GOLANGCI_LINT_VERSION#v}"; then
+  curl --fail --silent --show-error --location \
+    "https://raw.githubusercontent.com/golangci/golangci-lint/$GOLANGCI_LINT_VERSION/install.sh" | \
+    sh -s -- -b "$BIN_DIR" "$GOLANGCI_LINT_VERSION"
+fi
+echo "[setup] golangci-lint ready in $((SECONDS - step_started))s"
+
 "$GO_ROOT/bin/go" version
+"$BIN_DIR/golangci-lint" version
 echo "[setup] Complete"

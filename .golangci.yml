@@ -1,19 +1,24 @@
-linters-settings:
-  nakedret:
-    max-func-lines: 0 # Disallow any unnamed return statement
+version: "2"
 
 linters:
+  default: standard
   enable:
-    - unused
-    - errcheck
-    - gosimple
-    - govet
-    - ineffassign
-    - staticcheck
-    - typecheck
     - nakedret
-    - gofmt
     - rowserrcheck
     - unconvert
-    - goimports
     - unparam
+  settings:
+    nakedret:
+      max-func-lines: 0 # Disallow naked returns.
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    gofumpt:
+      module-path: github.com/maolonglong/redglob
+      extra-rules: true
+    goimports:
+      local-prefixes:
+        - github.com/maolonglong/redglob

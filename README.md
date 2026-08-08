@@ -13,6 +13,7 @@ Redglob is a simple glob-style pattern matcher library for Go, inspired by Redis
 - Case-insensitive matching
 - Capability to match strings and byte slices
 - Supports `*`, `?`, character classes `[abc]`, ranges `[a-z]`, and negation `[^abc]`
+- Zero third-party dependencies and no Cgo
 
 ## Installing
 
@@ -32,10 +33,9 @@ import (
 )
 
 func main() {
-	pattern := "h?ll*"
-	str := "hello, world!"
+	pattern := redglob.Compile("h?ll*")
 
-	if redglob.Match(str, pattern) {
+	if pattern.Match("hello, world!") {
 		fmt.Println("Match!")
 	} else {
 		fmt.Println("No match.")
@@ -49,6 +49,10 @@ func main() {
 - `MatchFold(str, pattern string) bool`: case-insensitive version of `Match`.
 - `MatchBytes(b []byte, pattern string) bool`: similar to `Match`, but accepts a byte slice instead of a string.
 - `MatchBytesFold(b []byte, pattern string) bool`: case-insensitive version of `MatchBytes`.
+- `Compile(pattern string) *Pattern`: compiles a pattern for repeated, concurrency-safe matching.
+
+Compiled patterns provide `Match`, `MatchFold`, `MatchBytes`, and `MatchBytesFold` methods. Use
+the package-level functions for one-off matches and `Compile` when the same pattern is reused.
 
 ## Syntax
 
@@ -66,6 +70,25 @@ Redglob's pattern syntax is similar to that of Redis's `KEYS` command:
 ## Performance
 
 Redglob is implemented in pure Go and is optimized for performance. It uses a simple and efficient algorithm to match patterns against strings, and takes advantage of Go's built-in Unicode support to handle Unicode characters correctly.
+
+Cross-library benchmarks live in the isolated [`benchmarks`](benchmarks) module. Benchmark-only
+dependencies never enter redglob's module graph; see its README for methodology and commands.
+
+### Experimental SIMD
+
+Go 1.27 adds an experimental, portable `simd` package. When redglob is built with a Go 1.27+
+toolchain and `GOEXPERIMENT=simd`, long ASCII case-insensitive literal and prefix comparisons use
+that package. Short or non-ASCII comparisons continue through the scalar/Unicode implementation.
+
+```sh
+GOEXPERIMENT=simd go test ./...
+GOEXPERIMENT=simd go build ./...
+```
+
+SIMD remains disabled by default and the module's `go 1.26` directive is unchanged. Users do not
+gain dependencies, Cgo, new API requirements, or special build settings unless they explicitly
+enable the experiment. Since Go's SIMD API is not yet stable, this path may change before a future
+Go release makes it generally available.
 
 ## License
 
