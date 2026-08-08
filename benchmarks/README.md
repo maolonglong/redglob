@@ -21,6 +21,8 @@ The suite splits three costs on purpose:
 2. Compilation cost
 3. Steady-state matching on an already compiled pattern
 
+Longer inputs (`BenchmarkMatchFoldASCIILength`, `BenchmarkLongMultiStar`, `BenchmarkMatchBytes`) call `b.SetBytes` so results include MB/s throughput. `BenchmarkMatchBytes` covers the `[]byte` APIs (`MatchBytes` / `MatchBytesFold` and their compiled forms).
+
 Cross-library rankings skip cases where semantics diverge: negated classes, path separators, malformed patterns, and non-ASCII case folding.
 
 Unicode `?` matching is reported in its own set of benches and omits gobwas/glob. Its fixed-length optimization treats `?` as one byte in some paths, so `a?b` does not match `a界b` the way redglob does.

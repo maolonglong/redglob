@@ -211,6 +211,7 @@ func BenchmarkMatchFoldASCIILength(b *testing.B) {
 		pattern := strings.ToUpper(input)
 		compiled := redglob.Compile(pattern)
 		b.Run(strconv.Itoa(size), func(b *testing.B) {
+			b.SetBytes(int64(size))
 			b.Run("Redglob", func(b *testing.B) {
 				for b.Loop() {
 					matchResult = redglob.MatchFold(input, pattern)
@@ -242,6 +243,7 @@ func BenchmarkLongMultiStar(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
+			b.SetBytes(int64(len(tc.input)))
 			b.Run("Redglob", func(b *testing.B) {
 				for b.Loop() {
 					matchResult = redglob.Match(tc.input, tc.pattern)
@@ -269,6 +271,38 @@ func BenchmarkLongMultiStar(b *testing.B) {
 			})
 		})
 	}
+}
+
+func BenchmarkMatchBytes(b *testing.B) {
+	const pattern = "customer:*:profile"
+	input := []byte("customer:1234567890:profile")
+	redglobPattern := redglob.Compile(pattern)
+	assertMatch(b, redglob.MatchBytes(input, pattern), true)
+	assertMatch(b, redglobPattern.MatchBytes(input), true)
+
+	b.SetBytes(int64(len(input)))
+	b.Run("Redglob", func(b *testing.B) {
+		for b.Loop() {
+			matchResult = redglob.MatchBytes(input, pattern)
+		}
+	})
+	b.Run("RedglobCompiled", func(b *testing.B) {
+		for b.Loop() {
+			matchResult = redglobPattern.MatchBytes(input)
+		}
+	})
+	b.Run("RedglobFold", func(b *testing.B) {
+		upper := []byte("CUSTOMER:1234567890:PROFILE")
+		for b.Loop() {
+			matchResult = redglob.MatchBytesFold(upper, pattern)
+		}
+	})
+	b.Run("RedglobCompiledFold", func(b *testing.B) {
+		upper := []byte("CUSTOMER:1234567890:PROFILE")
+		for b.Loop() {
+			matchResult = redglobPattern.MatchBytesFold(upper)
+		}
+	})
 }
 
 func TestBenchmarkSemantics(t *testing.T) {

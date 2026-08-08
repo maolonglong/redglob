@@ -58,6 +58,37 @@ func TestMatch_tidwall(t *testing.T) {
 	if Match("hello world\\", "hello world\\") {
 		t.Fatal("fail")
 	}
+
+	// Compile must agree with Match on the basic cases above.
+	basic := []struct {
+		str, pattern string
+		want         bool
+	}{
+		{"hello world", "hello world", true},
+		{"hello world", "jello world", false},
+		{"hello world", "hello*", true},
+		{"hello world", "jello*", false},
+		{"hello world", "hello?world", true},
+		{"hello world", "jello?world", false},
+		{"hello world", "he*o?world", true},
+		{"hello world", "he*o?wor*", true},
+		{"hello world", "he*o?*r*", true},
+		{"hello*world", `hello\*world`, true},
+		{"he解lo*world", `he解lo\*world`, true},
+		{"的情况下解析一个", "*", true},
+		{"的情况下解析一个", "*况下*", true},
+		{"的情况下解析一个", "*况?*", true},
+		{"的情况下解析一个", "的情况?解析一个", true},
+		{"hello world\\", "hello world\\", false},
+	}
+	for _, tt := range basic {
+		if got := Match(tt.str, tt.pattern); got != tt.want {
+			t.Errorf("Match(%q, %q) = %v, want %v", tt.str, tt.pattern, got, tt.want)
+		}
+		if got := Compile(tt.pattern).Match(tt.str); got != tt.want {
+			t.Errorf("Compile(%q).Match(%q) = %v, want %v", tt.pattern, tt.str, got, tt.want)
+		}
+	}
 }
 
 // TestWildcardMatch - Tests validate the logic of wild card matching.
@@ -370,13 +401,27 @@ func TestWildcardMatch_tidwall(t *testing.T) {
 				actualResult,
 			)
 		}
+		if got := Compile(testCase.pattern).Match(testCase.text); got != testCase.matched {
+			t.Errorf(
+				"Test %d: Compile(%q).Match(%q) = %v, want %v",
+				i+1,
+				testCase.pattern,
+				testCase.text,
+				got,
+				testCase.matched,
+			)
+		}
 	}
 }
 
 func TestRandomInput_tidwall(t *testing.T) {
 	b1 := make([]byte, 100)
 	b2 := make([]byte, 100)
-	for i := 0; i < 1000000; i++ {
+	iterations := 1000000
+	if testing.Short() {
+		iterations = 1000
+	}
+	for i := 0; i < iterations; i++ {
 		if _, err := rand.Read(b1); err != nil {
 			t.Fatal(err)
 		}

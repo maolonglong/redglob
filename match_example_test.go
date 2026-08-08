@@ -11,6 +11,11 @@ func ExampleMatch() {
 	// Output: true
 }
 
+func ExampleMatchFold() {
+	fmt.Println(redglob.MatchFold("Foo", "f*"))
+	// Output: true
+}
+
 func ExampleCompile() {
 	pattern := redglob.Compile("user:[0-9]*")
 	fmt.Println(pattern.Match("user:42"))
