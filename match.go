@@ -46,9 +46,9 @@ func Match(str, pattern string) bool {
 		if !strings.HasSuffix(str, suffix) {
 			return false
 		}
-		return stringmatch(str[:len(str)-len(suffix)], pattern[:starEnd], false)
+		return stringmatchIter(str[:len(str)-len(suffix)], pattern[:starEnd], false)
 	}
-	return stringmatch(str, pattern, false)
+	return stringmatchIter(str, pattern, false)
 }
 
 // MatchFold is a case-insensitive version of the Match function.
@@ -71,9 +71,9 @@ func MatchFold(str, pattern string) bool {
 		if !matches {
 			return false
 		}
-		return stringmatch(str[:suffixStart], pattern[:starEnd], true)
+		return stringmatchIter(str[:suffixStart], pattern[:starEnd], true)
 	}
-	return stringmatch(str, pattern, true)
+	return stringmatchIter(str, pattern, true)
 }
 
 // MatchBytes is similar to Match, but it receives a byteslice instead of a string as input.
@@ -89,6 +89,141 @@ func MatchBytesFold(b []byte, pattern string) bool {
 	return MatchFold(b2s(b), pattern)
 }
 
+// stringmatchIter matches without allocations or recursive star expansion.
+// The most recent star is the only checkpoint needed for a flat glob: after a
+// mismatch it consumes one more input rune and retries the pattern after it.
+func stringmatchIter(str, pattern string, nocase bool) bool {
+	patternIndex, stringIndex := 0, 0
+	starPattern, starString := -1, 0
+	for stringIndex < len(str) {
+		if patternIndex < len(pattern) {
+			pc, patternSize := decodeRune(pattern[patternIndex:])
+			sc, stringSize := decodeRune(str[stringIndex:])
+			switch pc {
+			case '*':
+				for patternIndex < len(pattern) && pattern[patternIndex] == '*' {
+					patternIndex++
+				}
+				starPattern, starString = patternIndex, stringIndex
+				continue
+			case '?':
+				count := 1
+				for patternIndex+count < len(pattern) && pattern[patternIndex+count] == '?' {
+					count++
+				}
+				if next, ok := consumeAnyN(str, stringIndex, count); ok {
+					patternIndex += count
+					stringIndex = next
+					continue
+				}
+			case '[':
+				consumed, matched, valid := matchPatternClass(pattern[patternIndex+patternSize:], sc, nocase)
+				if !valid {
+					return false
+				}
+				if matched {
+					patternIndex += patternSize + consumed
+					stringIndex += stringSize
+					continue
+				}
+			case '\\':
+				patternIndex += patternSize
+				if patternIndex == len(pattern) {
+					return false
+				}
+				pc, patternSize = decodeRune(pattern[patternIndex:])
+				if runesMatch(sc, pc, nocase) {
+					patternIndex += patternSize
+					stringIndex += stringSize
+					continue
+				}
+			default:
+				if runesMatch(sc, pc, nocase) {
+					patternIndex += patternSize
+					stringIndex += stringSize
+					continue
+				}
+			}
+		}
+
+		if starPattern < 0 || starString >= len(str) {
+			return false
+		}
+		_, size := decodeRune(str[starString:])
+		starString += size
+		stringIndex = starString
+		patternIndex = starPattern
+	}
+
+	for patternIndex < len(pattern) && pattern[patternIndex] == '*' {
+		patternIndex++
+	}
+	return patternIndex == len(pattern)
+}
+
+// matchPatternClass parses pattern immediately after '[' and reports the
+// bytes consumed through ']', whether char matched, and whether it was valid.
+func matchPatternClass(pattern string, char rune, nocase bool) (int, bool, bool) {
+	negated := len(pattern) > 0 && pattern[0] == '^'
+	index := 0
+	if negated {
+		index++
+	}
+	matched := false
+	for {
+		if index >= len(pattern) {
+			return 0, false, false
+		}
+		start, size := decodeRune(pattern[index:])
+		if start == '\\' {
+			index += size
+			if index >= len(pattern) {
+				return 0, false, false
+			}
+			start, size = decodeRune(pattern[index:])
+			if runesMatch(char, start, nocase) {
+				matched = true
+			}
+			index += size
+			continue
+		}
+		if start == ']' {
+			return index + size, matched != negated, true
+		}
+		if len(pattern[index:]) > size+1 && pattern[index+size] == '-' {
+			endIndex := index + size + 1
+			end, endSize := decodeRune(pattern[endIndex:])
+			if start > end {
+				start, end = end, start
+			}
+			candidate := char
+			if nocase {
+				start = lowerRune(start)
+				end = lowerRune(end)
+				candidate = lowerRune(candidate)
+			}
+			if candidate >= start && candidate <= end {
+				matched = true
+			}
+			index = endIndex + endSize
+			continue
+		}
+		if runesMatch(char, start, nocase) {
+			matched = true
+		}
+		index += size
+	}
+}
+
+func runesMatch(a, b rune, nocase bool) bool {
+	if nocase {
+		return lowerRune(a) == lowerRune(b)
+	}
+	return a == b
+}
+
+// stringmatch is kept as a straightforward reference implementation for
+// differential tests and fuzzing of the optimized matchers.
 func stringmatch(str, pattern string, nocase bool) bool {
 	skipLongerMatches := false
 	return stringmatchImpl(str, pattern, nocase, &skipLongerMatches)

@@ -24,17 +24,18 @@ type token struct {
 	folded rune   // lower(char) for fold matching
 	lit    string // multi-rune literal run (tokenLiteralRun)
 	count  int    // consecutive '?' count (tokenAnyN)
-	class  []charRange
-	// ascii is non-nil for tokenClass and holds ASCII membership bitsets.
-	// Kept behind a pointer so non-class tokens stay small.
-	ascii   *classASCIIBits
-	negated bool
+	class  *compiledClass
 }
 
-// classASCIIBits holds 256-bit membership maps for sensitive and folded ASCII.
-type classASCIIBits struct {
-	bits       [4]uint64
-	foldedBits [4]uint64
+// compiledClass holds 128-bit membership maps for sensitive and folded ASCII.
+// The common single range is inline; larger classes allocate an overflow slice.
+type compiledClass struct {
+	bits       [2]uint64
+	foldedBits [2]uint64
+	rangeOne   charRange
+	ranges     []charRange
+	rangeCount int
+	negated    bool
 }
 
 type tokenKind uint8
@@ -60,9 +61,11 @@ func Compile(pattern string) *Pattern {
 	if p.prefix, p.suffix, p.hasStar, p.simple = splitSimplePattern(pattern); p.simple {
 		return p
 	}
-	originalPattern := pattern
-	literalOnly := true
-	starCount := 0
+	if isLiteralStarsPattern(pattern) {
+		p.literalStars = true
+		p.prefix = pattern
+		return p
+	}
 	// Cap is a lower bound on tokens: one per meta char, plus room for runs.
 	p.tokens = make([]token, 0, len(pattern)/2+1)
 	var litBuf []byte
@@ -97,7 +100,6 @@ func Compile(pattern string) *Pattern {
 		// stay as single-rune tokens and must not merge into byte runs.
 		if char == utf8.RuneError && (len(raw) != 3 || raw != string(utf8.RuneError)) {
 			flushLit()
-			literalOnly = false
 			p.tokens = append(p.tokens, token{
 				kind:   tokenLiteral,
 				char:   utf8.RuneError,
@@ -114,11 +116,9 @@ func Compile(pattern string) *Pattern {
 			flushLit()
 			if len(p.tokens) == 0 || p.tokens[len(p.tokens)-1].kind != tokenStar {
 				p.tokens = append(p.tokens, token{kind: tokenStar})
-				starCount++
 			}
 		case '?':
 			flushLit()
-			literalOnly = false
 			if n := len(p.tokens); n > 0 && p.tokens[n-1].kind == tokenAnyN {
 				p.tokens[n-1].count++
 			} else if n > 0 && p.tokens[n-1].kind == tokenAny {
@@ -128,7 +128,6 @@ func Compile(pattern string) *Pattern {
 			}
 		case '[':
 			flushLit()
-			literalOnly = false
 			var class token
 			class, pattern, p.valid = compileClass(pattern[size:])
 			if !p.valid {
@@ -137,8 +136,6 @@ func Compile(pattern string) *Pattern {
 			p.tokens = append(p.tokens, class)
 			continue
 		case '\\':
-			// Escaped literals break "literalOnly" multi-star fast path, same as before.
-			literalOnly = false
 			pattern = pattern[size:]
 			if len(pattern) == 0 {
 				p.valid = false
@@ -152,17 +149,13 @@ func Compile(pattern string) *Pattern {
 		pattern = pattern[size:]
 	}
 	flushLit()
-	if literalOnly && starCount > 1 {
-		p.literalStars = true
-		p.prefix = originalPattern
-	}
 	return p
 }
 
 func compileClass(pattern string) (token, string, bool) {
-	class := token{kind: tokenClass, ascii: &classASCIIBits{}}
+	class := &compiledClass{}
 	if len(pattern) == 0 {
-		return class, pattern, false
+		return token{kind: tokenClass}, pattern, false
 	}
 	if pattern[0] == '^' {
 		class.negated = true
@@ -170,35 +163,66 @@ func compileClass(pattern string) (token, string, bool) {
 	}
 	for {
 		if len(pattern) == 0 {
-			return class, pattern, false
+			return token{kind: tokenClass}, pattern, false
 		}
 		start, size := decodeRune(pattern)
 		if start == '\\' {
 			pattern = pattern[size:]
 			if len(pattern) == 0 {
-				return class, pattern, false
+				return token{kind: tokenClass}, pattern, false
 			}
 			start, size = decodeRune(pattern)
 		} else if start == ']' {
-			return class, pattern[size:], true
+			return token{kind: tokenClass, class: class}, pattern[size:], true
 		} else if len(pattern) > size+1 && pattern[size] == '-' {
 			pattern = pattern[size+1:]
 			end, endSize := decodeRune(pattern)
 			if start > end {
 				start, end = end, start
 			}
-			class.class = append(class.class, newCharRange(start, end))
-			addClassRangeBits(class.ascii, start, end)
+			class.addRange(newCharRange(start, end))
+			addClassRangeBits(class, start, end)
 			pattern = pattern[endSize:]
 			continue
 		}
-		class.class = append(class.class, newCharRange(start, start))
-		addClassRangeBits(class.ascii, start, start)
+		class.addRange(newCharRange(start, start))
+		addClassRangeBits(class, start, start)
 		pattern = pattern[size:]
 	}
 }
 
-func addClassRangeBits(bits *classASCIIBits, start, end rune) {
+func (class *compiledClass) addRange(r charRange) {
+	if class.rangeCount == 0 {
+		class.rangeOne = r
+	} else {
+		if class.ranges == nil {
+			class.ranges = append(class.ranges, class.rangeOne)
+		}
+		class.ranges = append(class.ranges, r)
+	}
+	class.rangeCount++
+}
+
+func (class *compiledClass) matchesRange(char rune, fold bool) bool {
+	if class.rangeCount == 1 {
+		if fold {
+			return char >= class.rangeOne.foldedStart && char <= class.rangeOne.foldedEnd
+		}
+		return char >= class.rangeOne.start && char <= class.rangeOne.end
+	}
+	for _, r := range class.ranges {
+		if fold {
+			if char >= r.foldedStart && char <= r.foldedEnd {
+				return true
+			}
+		} else if char >= r.start && char <= r.end {
+			return true
+		}
+	}
+	return false
+}
+
+func addClassRangeBits(class *compiledClass, start, end rune) {
 	// start/end are already ordered by code point (same as stringmatch).
 	// Sensitive bitset: every ASCII code point in [start, end].
 	if start <= unicode.MaxASCII {
@@ -208,7 +232,7 @@ func addClassRangeBits(bits *classASCIIBits, start, end rune) {
 		}
 		for r := start; r <= hi; r++ {
 			if r >= 0 {
-				setASCIIBit(&bits.bits, byte(r))
+				setASCIIBit(&class.bits, byte(r))
 			}
 		}
 	}
@@ -227,7 +251,7 @@ func addClassRangeBits(bits *classASCIIBits, start, end rune) {
 				hi = unicode.MaxASCII
 			}
 			for r := lo; r <= hi; r++ {
-				setASCIIBit(&bits.foldedBits, byte(r))
+				setASCIIBit(&class.foldedBits, byte(r))
 			}
 		}
 	}
@@ -236,16 +260,16 @@ func addClassRangeBits(bits *classASCIIBits, start, end rune) {
 	// single-code-point entries; multi-code ranges keep range-list matching.
 	if start == end && start > unicode.MaxASCII {
 		if folded := lowerRune(start); folded <= unicode.MaxASCII {
-			setASCIIBit(&bits.foldedBits, byte(folded))
+			setASCIIBit(&class.foldedBits, byte(folded))
 		}
 	}
 }
 
-func setASCIIBit(bits *[4]uint64, b byte) {
+func setASCIIBit(bits *[2]uint64, b byte) {
 	bits[b>>6] |= 1 << (b & 63)
 }
 
-func asciiBit(bits [4]uint64, b byte) bool {
+func asciiBit(bits [2]uint64, b byte) bool {
 	return bits[b>>6]&(1<<(b&63)) != 0
 }
 
@@ -294,7 +318,7 @@ func (p *Pattern) match(str string, fold bool) bool {
 		}
 		return matchSimple(str, p.prefix, p.suffix)
 	}
-	if p.literalStars && len(str) >= 64 {
+	if p.literalStars {
 		if fold {
 			return matchLiteralStarsValidFold(str, p.prefix)
 		}
@@ -302,7 +326,7 @@ func (p *Pattern) match(str string, fold bool) bool {
 	}
 	tokens := p.tokens
 	var suffixMatches bool
-	str, tokens, suffixMatches = trimPatternSuffix(str, tokens, fold)
+	str, tokens, suffixMatches = p.trimPatternSuffix(str, tokens, fold)
 	if !suffixMatches {
 		return false
 	}
@@ -336,7 +360,7 @@ func (p *Pattern) match(str string, fold bool) bool {
 			default:
 				if stringIndex < len(str) {
 					char, size := decodeRune(str[stringIndex:])
-					if tok.matches(char, fold) {
+					if p.tokenMatches(tok, char, fold) {
 						tokenIndex++
 						stringIndex += size
 						continue
@@ -393,7 +417,7 @@ func consumeLiteralRun(str string, offset int, lit string, fold bool) (int, bool
 	return offset + end, true
 }
 
-func trimPatternSuffix(str string, tokens []token, fold bool) (string, []token, bool) {
+func (p *Pattern) trimPatternSuffix(str string, tokens []token, fold bool) (string, []token, bool) {
 	starIndex := len(tokens) - 1
 	for starIndex >= 0 && tokens[starIndex].kind != tokenStar {
 		starIndex--
@@ -423,7 +447,7 @@ func trimPatternSuffix(str string, tokens []token, fold bool) (string, []token, 
 				return str, tokens, false
 			}
 			char, size := utf8.DecodeLastRuneInString(str[:end])
-			if !tok.matches(char, fold) {
+			if !p.tokenMatches(tok, char, fold) {
 				return str, tokens, false
 			}
 			end -= size
@@ -845,7 +869,7 @@ func matchSuffixFold(str, suffix string) (int, bool) {
 	return remaining, true
 }
 
-func (t token) matches(char rune, fold bool) bool {
+func (p *Pattern) tokenMatches(t *token, char rune, fold bool) bool {
 	switch t.kind {
 	case tokenLiteral:
 		if fold {
@@ -855,34 +879,23 @@ func (t token) matches(char rune, fold bool) bool {
 	case tokenAny:
 		return true
 	case tokenClass:
+		class := t.class
 		matched := false
 		if fold {
 			folded := lowerRune(char)
-			if folded <= unicode.MaxASCII && t.ascii != nil && asciiBit(t.ascii.foldedBits, byte(folded)) {
+			if folded <= unicode.MaxASCII && asciiBit(class.foldedBits, byte(folded)) {
 				matched = true
 			} else {
 				// Range fallback for non-ASCII folded chars and for singletons
 				// whose fold-into-ASCII bit may be missing from sparse scans.
-				for _, r := range t.class {
-					if folded >= r.foldedStart && folded <= r.foldedEnd {
-						matched = true
-						break
-					}
-				}
+				matched = class.matchesRange(folded, true)
 			}
 		} else if char <= unicode.MaxASCII {
-			if t.ascii != nil {
-				matched = asciiBit(t.ascii.bits, byte(char))
-			}
+			matched = asciiBit(class.bits, byte(char))
 		} else {
-			for _, r := range t.class {
-				if char >= r.start && char <= r.end {
-					matched = true
-					break
-				}
-			}
+			matched = class.matchesRange(char, false)
 		}
-		return matched != t.negated
+		return matched != class.negated
 	default:
 		return false
 	}

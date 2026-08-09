@@ -465,10 +465,16 @@ func TestCompiledTokenShapes(t *testing.T) {
 		{`hello\*world`, []tokenKind{tokenLiteralRun}, 0, "hello*world", false},
 		{"[a-z]", []tokenKind{tokenClass}, 0, "", true},
 		{"user:[0-9]*", []tokenKind{tokenLiteralRun, tokenClass, tokenStar}, 0, "user:", true},
-		{"a*b*c", []tokenKind{tokenLiteral, tokenStar, tokenLiteral, tokenStar, tokenLiteral}, 0, "", false},
+		{"a*b*c", []tokenKind{}, 0, "", false}, // literal-star fast path
 	}
 	for _, tt := range cases {
 		p := Compile(tt.pattern)
+		if tt.pattern == "a*b*c" {
+			if !p.literalStars || len(p.tokens) != 0 {
+				t.Errorf("Compile(%q) did not use token-free literal-star path", tt.pattern)
+			}
+			continue
+		}
 		if p.simple {
 			if len(tt.kinds) != 0 {
 				t.Errorf("Compile(%q) unexpectedly simple", tt.pattern)
@@ -522,10 +528,58 @@ func TestCompiledTokenShapes(t *testing.T) {
 			}
 			if tok.kind != tokenClass {
 				t.Errorf("Compile(%q) missing class", tt.pattern)
-			} else if tt.pattern == "[a-z]" && (tok.ascii == nil || !asciiBit(tok.ascii.bits, 'a')) {
+			} else if tt.pattern == "[a-z]" && !asciiBit(tok.class.bits, 'a') {
 				t.Errorf("Compile([a-z]) bitset missing 'a'")
 			}
 		}
+	}
+}
+
+func TestOptimizedMatcherEdges(t *testing.T) {
+	for _, pattern := range []string{"*[", "**[abc", `*abc\`, "***[a-"} {
+		checkMatchAPIs(t, "abc", pattern, false)
+		checkMatchFoldAPIs(t, "ABC", pattern, false)
+	}
+
+	for _, tt := range []struct {
+		str, pattern string
+		want         bool
+	}{
+		{"abcd", "????", true},
+		{"a三🚀", "???", true},
+		{"a三🚀", "????", false},
+		{string([]byte{0xff, 0xfe, 0xfd}), "???", true},
+		{"prefix四字尾", "*????尾", true},
+		{"三字尾", "*????尾", false},
+		{"界", "[界🚀]", true},
+		{"🚀", "[界🚀]", true},
+		{"文", "[界🚀]", false},
+		{"k", "[K]", true},
+		{"K", "[k]", true},
+	} {
+		if tt.pattern == "[K]" || tt.pattern == "[k]" {
+			checkMatchFoldAPIs(t, tt.str, tt.pattern, tt.want)
+			continue
+		}
+		checkMatchAPIs(t, tt.str, tt.pattern, tt.want)
+	}
+}
+
+func TestOneShotManyStarsDoesNotRecurse(t *testing.T) {
+	const count = 10_000
+	str := strings.Repeat("a", count)
+	pattern := strings.Repeat("*?", count)
+	if !Match(str, pattern) || !MatchFold(str, pattern) {
+		t.Fatal("one-shot iterative matcher failed deep star pattern")
+	}
+}
+
+func TestOneShotComplexMatchAllocations(t *testing.T) {
+	if allocs := testing.AllocsPerRun(100, func() {
+		Match("event:production:42", "event:[a-z]*:[0-9][0-9]")
+		MatchFold("EVENT:PRODUCTION:42", "event:[a-z]*:[0-9][0-9]")
+	}); allocs != 0 {
+		t.Fatalf("one-shot complex matching allocated %v times, want 0", allocs)
 	}
 }
 
@@ -752,6 +806,21 @@ func BenchmarkLiteralStarsFold(b *testing.B) {
 						}
 					}
 				})
+			}
+		})
+	}
+}
+
+func BenchmarkOneShotQuestionRuns(b *testing.B) {
+	for _, count := range []int{16, 64} {
+		str := strings.Repeat("a", count)
+		pattern := strings.Repeat("?", count)
+		b.Run(fmt.Sprintf("ASCII%d", count), func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				if !Match(str, pattern) {
+					b.Fatal("question run did not match")
+				}
 			}
 		})
 	}
