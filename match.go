@@ -61,6 +61,11 @@ func MatchFold(str, pattern string) bool {
 		}
 		return matchSimpleFold(str, prefix, suffix)
 	}
+	if len(str) >= 64 {
+		if matches, ok := matchLiteralStarsFold(str, pattern); ok {
+			return matches
+		}
+	}
 	if starEnd, suffix, ok := splitFixedSuffix(pattern); ok {
 		suffixStart, matches := matchSuffixFold(str, suffix)
 		if !matches {

@@ -1,6 +1,7 @@
 package redglob
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -233,6 +234,20 @@ var foldTests = []struct {
 	{"XYZ中文", "*abc中文", false},
 	{"中文ABCtail中文", "中文abc*中文", true},
 	{"中文ABCtail日文", "中文abc*中文", false},
+	// Long multi-star fold path (len(str) >= 64).
+	{"START" + longPad + "MID" + longPad + "END", "start*mid*end", true},
+	{"START" + longPad + "MID" + longPad + "END", "start**mid**end", true},
+	{"START" + longPad + "MAD" + longPad + "END", "start*mid*end", false},
+	{"START" + longPad + "MID" + longPad + "ENO", "start*mid*end", false},
+	{longPad + "MID" + longPad, "*mid*", true},
+	// Overlapping segment placement under fold.
+	{"AA" + longPad + "AABB" + longPad + "BB", "aa*aabb*bb", true},
+	// Kelvin sign (U+212A) folds to 'k'; forces non-ASCII haystack path.
+	{"START" + longPad + "K" + longPad + "END", "start*k*end", true},
+	{"START" + longPad + "X" + longPad + "END", "start*k*end", false},
+	// Non-ASCII literal segments under multi-star fold.
+	{"前" + longPad + "中" + longPad + "後", "前*中*後", true},
+	{"前" + longPad + "中" + longPad + "后", "前*中*後", false},
 }
 
 func allMatchCases() []struct {
@@ -433,6 +448,146 @@ func TestOptimizedSuffixEdgeCases(t *testing.T) {
 	}
 }
 
+func TestCompiledTokenShapes(t *testing.T) {
+	cases := []struct {
+		pattern string
+		kinds   []tokenKind
+		// optional checks
+		anyN  int
+		lit   string
+		class bool
+	}{
+		{"????", []tokenKind{tokenAnyN}, 4, "", false},
+		{"??", []tokenKind{tokenAnyN}, 2, "", false},
+		{"?", []tokenKind{tokenAny}, 0, "", false},
+		{"file-??.txt", []tokenKind{tokenLiteralRun, tokenAnyN, tokenLiteralRun}, 2, "file-", false},
+		{"hello", []tokenKind{}, 0, "", false}, // simple
+		{`hello\*world`, []tokenKind{tokenLiteralRun}, 0, "hello*world", false},
+		{"[a-z]", []tokenKind{tokenClass}, 0, "", true},
+		{"user:[0-9]*", []tokenKind{tokenLiteralRun, tokenClass, tokenStar}, 0, "user:", true},
+		{"a*b*c", []tokenKind{tokenLiteral, tokenStar, tokenLiteral, tokenStar, tokenLiteral}, 0, "", false},
+	}
+	for _, tt := range cases {
+		p := Compile(tt.pattern)
+		if p.simple {
+			if len(tt.kinds) != 0 {
+				t.Errorf("Compile(%q) unexpectedly simple", tt.pattern)
+			}
+			continue
+		}
+		if len(p.tokens) != len(tt.kinds) {
+			t.Errorf("Compile(%q) tokens=%d kinds=%v, want %d %v", tt.pattern, len(p.tokens), tokenKinds(p.tokens), len(tt.kinds), tt.kinds)
+			continue
+		}
+		for i, k := range tt.kinds {
+			if p.tokens[i].kind != k {
+				t.Errorf("Compile(%q) token[%d]=%v, want %v (all=%v)", tt.pattern, i, p.tokens[i].kind, k, tokenKinds(p.tokens))
+			}
+		}
+		if tt.anyN > 0 {
+			found := false
+			for _, tok := range p.tokens {
+				if tok.kind == tokenAnyN && tok.count == tt.anyN {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("Compile(%q) missing AnyN count=%d", tt.pattern, tt.anyN)
+			}
+		}
+		if tt.lit != "" {
+			found := false
+			for _, tok := range p.tokens {
+				if tok.kind == tokenLiteralRun && tok.lit == tt.lit {
+					found = true
+				}
+			}
+			if !found && len(tt.lit) != 1 {
+				// also accept if pattern fully became one run
+				if len(p.tokens) == 1 && p.tokens[0].kind == tokenLiteralRun && p.tokens[0].lit == tt.lit {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("Compile(%q) missing literal run %q; tokens=%v", tt.pattern, tt.lit, dumpTokens(p.tokens))
+			}
+		}
+		if tt.class {
+			tok := p.tokens[0]
+			for _, t2 := range p.tokens {
+				if t2.kind == tokenClass {
+					tok = t2
+					break
+				}
+			}
+			if tok.kind != tokenClass {
+				t.Errorf("Compile(%q) missing class", tt.pattern)
+			} else if tt.pattern == "[a-z]" && (tok.ascii == nil || !asciiBit(tok.ascii.bits, 'a')) {
+				t.Errorf("Compile([a-z]) bitset missing 'a'")
+			}
+		}
+	}
+}
+
+func tokenKinds(tokens []token) []tokenKind {
+	out := make([]tokenKind, len(tokens))
+	for i, tok := range tokens {
+		out[i] = tok.kind
+	}
+	return out
+}
+
+func dumpTokens(tokens []token) string {
+	parts := make([]string, 0, len(tokens))
+	for _, tok := range tokens {
+		parts = append(parts, fmt.Sprintf("%d:%q/%d", tok.kind, tok.lit, tok.count))
+	}
+	return strings.Join(parts, ",")
+}
+
+func TestLiteralStarsFoldFastPath(t *testing.T) {
+	// Below the 64-byte threshold the multi-star fold fast path is skipped.
+	short := "STARTmidEND"
+	if got, want := MatchFold(short, "start*mid*end"), stringmatch(short, "start*mid*end", true); got != want {
+		t.Errorf("short MatchFold = %v, want %v", got, want)
+	}
+
+	cases := []struct {
+		str, pattern string
+		want         bool
+	}{
+		{"START" + longPad + "MID" + longPad + "END", "start*mid*end", true},
+		{"start" + longPad + "mid" + longPad + "end", "START*MID*END", true},
+		{"START" + longPad + "MID" + longPad + "END", "start*missing*end", false},
+		// First segment match must leave room for later segments.
+		{"X" + longPad + "MIDMID" + longPad + "END", "x*mid*mid*end", true},
+		{"X" + longPad + "MID" + longPad + "END", "x*mid*mid*end", false},
+		// Empty middle segments via collapsed stars.
+		{"AA" + longPad + "BB", "aa***bb", true},
+		// Prefix/suffix only multi-star.
+		{longPad + "MID" + longPad, "*mid*", true},
+		{longPad + "MAD" + longPad, "*mid*", false},
+		// Non-ASCII fold of Kelvin inside a long haystack.
+		{longPad + "KELVIN" + longPad, "*kelvin*", true},
+		{longPad + "KELVIN" + longPad, "*Kelvin*", true},
+		// Invalid UTF-8 must stay equivalent to the reference matcher.
+		{strings.Repeat("A", 64) + string([]byte{0xfe}) + "Z", "a*" + string([]byte{0xff}) + "*z", true},
+	}
+	for _, tt := range cases {
+		want := tt.want
+		if ref := stringmatch(tt.str, tt.pattern, true); ref != want {
+			t.Fatalf("test table disagree with stringmatch for %q ~ %q: table=%v ref=%v", tt.str, tt.pattern, want, ref)
+		}
+		checkMatchFoldAPIs(t, tt.str, tt.pattern, want)
+		// Sensitive multi-star path must remain unchanged for pure lower input.
+		lowerStr := strings.ToLower(tt.str)
+		lowerPat := strings.ToLower(tt.pattern)
+		if isASCII(lowerStr) && isASCII(lowerPat) {
+			checkMatchAPIs(t, lowerStr, lowerPat, want)
+		}
+	}
+}
+
 func FuzzCompile(f *testing.F) {
 	for _, tt := range tests {
 		f.Add(tt.args.str, tt.args.pattern)
@@ -445,6 +600,9 @@ func FuzzCompile(f *testing.F) {
 	}
 	f.Add(string([]byte{0xff, 0xfe, 'x'}), string([]byte{'*', 0xfd, 'x'}))
 	f.Add("start"+longPad+"mid"+longPad+"end", "start*mid*end")
+	f.Add("START"+longPad+"MID"+longPad+"END", "start*mid*end")
+	f.Add(longPad+"K"+longPad, "*k*")
+	f.Add("前"+longPad+"中"+longPad+"後", "前*中*後")
 	f.Add("abc", `abc\`)
 	f.Add("a", "[a-")
 	f.Fuzz(func(t *testing.T, str, pattern string) {
@@ -544,6 +702,57 @@ func BenchmarkRepeatedMatchFold(b *testing.B) {
 					}
 				}
 			})
+		})
+	}
+}
+
+func BenchmarkLiteralStarsFold(b *testing.B) {
+	pad := strings.Repeat("x", 200)
+	cases := []struct {
+		name, str, pattern string
+		want               bool
+	}{
+		{"Hit", "START" + pad + "MID" + pad + "END", "start*mid*end", true},
+		{"Miss", "START" + pad + "MAD" + pad + "END", "start*mid*end", false},
+		{"SensitiveHit", "start" + pad + "mid" + pad + "end", "start*mid*end", true},
+	}
+	for _, tt := range cases {
+		b.Run(tt.name, func(b *testing.B) {
+			compiled := Compile(tt.pattern)
+			b.Run("DirectFold", func(b *testing.B) {
+				b.ReportAllocs()
+				for i := 0; i < b.N; i++ {
+					if got := MatchFold(tt.str, tt.pattern); got != tt.want {
+						b.Fatalf("MatchFold() = %v, want %v", got, tt.want)
+					}
+				}
+			})
+			b.Run("CompiledFold", func(b *testing.B) {
+				b.ReportAllocs()
+				for i := 0; i < b.N; i++ {
+					if got := compiled.MatchFold(tt.str); got != tt.want {
+						b.Fatalf("Pattern.MatchFold() = %v, want %v", got, tt.want)
+					}
+				}
+			})
+			if tt.name == "SensitiveHit" {
+				b.Run("Direct", func(b *testing.B) {
+					b.ReportAllocs()
+					for i := 0; i < b.N; i++ {
+						if got := Match(tt.str, tt.pattern); got != tt.want {
+							b.Fatalf("Match() = %v, want %v", got, tt.want)
+						}
+					}
+				})
+				b.Run("Compiled", func(b *testing.B) {
+					b.ReportAllocs()
+					for i := 0; i < b.N; i++ {
+						if got := compiled.Match(tt.str); got != tt.want {
+							b.Fatalf("Pattern.Match() = %v, want %v", got, tt.want)
+						}
+					}
+				})
+			}
 		})
 	}
 }
