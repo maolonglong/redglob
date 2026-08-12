@@ -227,6 +227,14 @@ var foldTests = []struct {
 	{"ß", "SS", false},
 	{"k", "K", true},
 	{"K", "k", true},
+	{"KkZ", "*k?Z", true},
+	{"ς", "Σ", true},
+	{"ſ", "S", true},
+	{"İ", "i", false},
+	{"ς", "[Σ]", true},
+	{"ſ", "[A-Z]", true},
+	{"İ", "[A-Z]", false},
+	{"A", "[b-C]", true},
 	// Non-ASCII simple fold prefix/suffix paths.
 	{"中文ABC", "中文abc*", true},
 	{"中文XYZ", "中文abc*", false},
@@ -240,6 +248,7 @@ var foldTests = []struct {
 	{"START" + longPad + "MAD" + longPad + "END", "start*mid*end", false},
 	{"START" + longPad + "MID" + longPad + "ENO", "start*mid*end", false},
 	{longPad + "MID" + longPad, "*mid*", true},
+	{longPad + "KAkZ", "*k*A*Z", true},
 	// Overlapping segment placement under fold.
 	{"AA" + longPad + "AABB" + longPad + "BB", "aa*aabb*bb", true},
 	// Kelvin sign (U+212A) folds to 'k'; forces non-ASCII haystack path.
@@ -358,6 +367,17 @@ func TestCompile(t *testing.T) {
 	invalid := string([]byte{0xff})
 	if !Match(string([]byte{0xfe}), invalid) || !Compile(invalid).Match(string([]byte{0xfe})) {
 		t.Error("invalid UTF-8 bytes should retain RuneError matching semantics")
+	}
+}
+
+func TestCompileBoundsInitialTokenCapacity(t *testing.T) {
+	pattern := `\` + strings.Repeat("a", 4096)
+	compiled := Compile(pattern)
+	if len(compiled.tokens) != 1 || compiled.tokens[0].kind != tokenLiteralRun {
+		t.Fatalf("Compile(long escaped literal) tokens = %v, want one literal run", tokenKinds(compiled.tokens))
+	}
+	if capacity := cap(compiled.tokens); capacity > 32 {
+		t.Fatalf("Compile(long escaped literal) token capacity = %d, want at most 32", capacity)
 	}
 }
 
@@ -583,6 +603,17 @@ func TestOneShotComplexMatchAllocations(t *testing.T) {
 	}
 }
 
+func TestStarLiteralSearch(t *testing.T) {
+	literal := strings.Repeat("a", 256) + "b"
+	pattern := "*" + literal + "*?"
+	checkMatchAPIs(t, "prefix"+literal+"z", pattern, true)
+	checkMatchAPIs(t, strings.Repeat("a", 1024)+"x", pattern, false)
+
+	foldPattern := "*" + strings.ToUpper(literal) + "*?"
+	checkMatchFoldAPIs(t, "prefix"+literal+"z", foldPattern, true)
+	checkMatchFoldAPIs(t, strings.Repeat("a", 1024)+"x", foldPattern, false)
+}
+
 func tokenKinds(tokens []token) []tokenKind {
 	out := make([]tokenKind, len(tokens))
 	for i, tok := range tokens {
@@ -661,29 +692,31 @@ func FuzzCompile(f *testing.F) {
 	f.Add("a", "[a-")
 	f.Fuzz(func(t *testing.T, str, pattern string) {
 		compiled := Compile(pattern)
-		if got, want := compiled.Match(str), stringmatch(str, pattern, false); got != want {
+		want := stringmatch(str, pattern, false)
+		wantFold := stringmatch(str, pattern, true)
+		if got := compiled.Match(str); got != want {
 			t.Errorf("Compile(%q).Match(%q) = %v, want %v", pattern, str, got, want)
 		}
-		if got, want := compiled.MatchFold(str), stringmatch(str, pattern, true); got != want {
-			t.Errorf("Compile(%q).MatchFold(%q) = %v, want %v", pattern, str, got, want)
+		if got := compiled.MatchFold(str); got != wantFold {
+			t.Errorf("Compile(%q).MatchFold(%q) = %v, want %v", pattern, str, got, wantFold)
 		}
-		if got, want := compiled.MatchBytes([]byte(str)), stringmatch(str, pattern, false); got != want {
+		if got := compiled.MatchBytes([]byte(str)); got != want {
 			t.Errorf("Compile(%q).MatchBytes(%q) = %v, want %v", pattern, str, got, want)
 		}
-		if got, want := compiled.MatchBytesFold([]byte(str)), stringmatch(str, pattern, true); got != want {
-			t.Errorf("Compile(%q).MatchBytesFold(%q) = %v, want %v", pattern, str, got, want)
+		if got := compiled.MatchBytesFold([]byte(str)); got != wantFold {
+			t.Errorf("Compile(%q).MatchBytesFold(%q) = %v, want %v", pattern, str, got, wantFold)
 		}
-		if got, want := Match(str, pattern), stringmatch(str, pattern, false); got != want {
+		if got := Match(str, pattern); got != want {
 			t.Errorf("Match(%q, %q) = %v, want %v", str, pattern, got, want)
 		}
-		if got, want := MatchFold(str, pattern), stringmatch(str, pattern, true); got != want {
-			t.Errorf("MatchFold(%q, %q) = %v, want %v", str, pattern, got, want)
+		if got := MatchFold(str, pattern); got != wantFold {
+			t.Errorf("MatchFold(%q, %q) = %v, want %v", str, pattern, got, wantFold)
 		}
-		if got, want := MatchBytes([]byte(str), pattern), stringmatch(str, pattern, false); got != want {
+		if got := MatchBytes([]byte(str), pattern); got != want {
 			t.Errorf("MatchBytes(%q, %q) = %v, want %v", str, pattern, got, want)
 		}
-		if got, want := MatchBytesFold([]byte(str), pattern), stringmatch(str, pattern, true); got != want {
-			t.Errorf("MatchBytesFold(%q, %q) = %v, want %v", str, pattern, got, want)
+		if got := MatchBytesFold([]byte(str), pattern); got != wantFold {
+			t.Errorf("MatchBytesFold(%q, %q) = %v, want %v", str, pattern, got, wantFold)
 		}
 	})
 }
@@ -824,4 +857,44 @@ func BenchmarkOneShotQuestionRuns(b *testing.B) {
 			}
 		})
 	}
+}
+
+func BenchmarkStarLiteralMiss(b *testing.B) {
+	const size = 16_000
+	str := strings.Repeat("a", size) + "x"
+	pattern := "*" + strings.Repeat("a", size/2) + "b*?"
+	compiled := Compile(pattern)
+
+	b.Run("Direct", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			if Match(str, pattern) {
+				b.Fatal("unexpected match")
+			}
+		}
+	})
+	b.Run("Compiled", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			if compiled.Match(str) {
+				b.Fatal("unexpected match")
+			}
+		}
+	})
+	b.Run("DirectFold", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			if MatchFold(str, pattern) {
+				b.Fatal("unexpected match")
+			}
+		}
+	})
+	b.Run("CompiledFold", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			if compiled.MatchFold(str) {
+				b.Fatal("unexpected match")
+			}
+		}
+	})
 }

@@ -61,7 +61,7 @@ func matchASCIIFoldPrefixSIMD(str, pattern string) (int, bool) {
 	}
 
 	for consumed < limit && strBytes[consumed] < utf8.RuneSelf && patternBytes[consumed] < utf8.RuneSelf {
-		if lowerRune(rune(strBytes[consumed])) != lowerRune(rune(patternBytes[consumed])) {
+		if lowerASCIIRune(rune(strBytes[consumed])) != lowerASCIIRune(rune(patternBytes[consumed])) {
 			return 0, false
 		}
 		consumed++

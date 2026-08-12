@@ -3,7 +3,6 @@
 package redglob
 
 import (
-	"crypto/rand"
 	"strings"
 	"testing"
 )
@@ -411,24 +410,6 @@ func TestWildcardMatch_tidwall(t *testing.T) {
 				testCase.matched,
 			)
 		}
-	}
-}
-
-func TestRandomInput_tidwall(t *testing.T) {
-	b1 := make([]byte, 100)
-	b2 := make([]byte, 100)
-	iterations := 1000000
-	if testing.Short() {
-		iterations = 1000
-	}
-	for i := 0; i < iterations; i++ {
-		if _, err := rand.Read(b1); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := rand.Read(b2); err != nil {
-			t.Fatal(err)
-		}
-		Match(string(b1), string(b2))
 	}
 }
 

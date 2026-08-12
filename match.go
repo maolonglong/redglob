@@ -48,12 +48,15 @@ func Match(str, pattern string) bool {
 		}
 		return stringmatchIter(str[:len(str)-len(suffix)], pattern[:starEnd], false)
 	}
+	if invalidLongPattern(pattern) {
+		return false
+	}
 	return stringmatchIter(str, pattern, false)
 }
 
-// MatchFold is a case-insensitive version of the Match function.
-// This function is similar to Match, but it ignores the case of the characters
-// in `str` and `pattern` when checking for a match.
+// MatchFold is a case-insensitive version of Match. It uses Unicode simple case
+// folding while preserving the matcher's one-pattern-rune-per-input-rune
+// semantics.
 func MatchFold(str, pattern string) bool {
 	if prefix, suffix, hasStar, ok := splitSimplePattern(pattern); ok {
 		if !hasStar {
@@ -73,6 +76,9 @@ func MatchFold(str, pattern string) bool {
 		}
 		return stringmatchIter(str[:suffixStart], pattern[:starEnd], true)
 	}
+	if invalidLongPattern(pattern) {
+		return false
+	}
 	return stringmatchIter(str, pattern, true)
 }
 
@@ -82,9 +88,8 @@ func MatchBytes(b []byte, pattern string) bool {
 	return Match(b2s(b), pattern)
 }
 
-// MatchBytesFold is a case-insensitive version of the MatchBytes function.
-// This function is similar to MatchBytes, but it ignores the case of the characters
-// in the byte slice and `pattern` when checking for a match.
+// MatchBytesFold is a case-insensitive version of MatchBytes. It uses Unicode
+// simple case folding.
 func MatchBytesFold(b []byte, pattern string) bool {
 	return MatchFold(b2s(b), pattern)
 }
@@ -94,7 +99,7 @@ func MatchBytesFold(b []byte, pattern string) bool {
 // mismatch it consumes one more input rune and retries the pattern after it.
 func stringmatchIter(str, pattern string, nocase bool) bool {
 	patternIndex, stringIndex := 0, 0
-	starPattern, starString := -1, 0
+	starPattern, starString, starLiteralEnd := -1, 0, -1
 	for stringIndex < len(str) {
 		if patternIndex < len(pattern) {
 			pc, patternSize := decodeRune(pattern[patternIndex:])
@@ -105,6 +110,16 @@ func stringmatchIter(str, pattern string, nocase bool) bool {
 					patternIndex++
 				}
 				starPattern, starString = patternIndex, stringIndex
+				starLiteralEnd = starPattern + literalPrefixLen(pattern[starPattern:])
+				if starLiteralEnd > starPattern {
+					index, width := indexLiteral(str[stringIndex:], pattern[starPattern:starLiteralEnd], nocase)
+					if index < 0 {
+						return false
+					}
+					starString += index
+					stringIndex = starString + width
+					patternIndex = starLiteralEnd
+				}
 				continue
 			case '?':
 				count := 1
@@ -151,6 +166,16 @@ func stringmatchIter(str, pattern string, nocase bool) bool {
 		}
 		_, size := decodeRune(str[starString:])
 		starString += size
+		if starLiteralEnd > starPattern {
+			index, width := indexLiteral(str[starString:], pattern[starPattern:starLiteralEnd], nocase)
+			if index < 0 {
+				return false
+			}
+			starString += index
+			stringIndex = starString + width
+			patternIndex = starLiteralEnd
+			continue
+		}
 		stringIndex = starString
 		patternIndex = starPattern
 	}
@@ -159,6 +184,57 @@ func stringmatchIter(str, pattern string, nocase bool) bool {
 		patternIndex++
 	}
 	return patternIndex == len(pattern)
+}
+
+func literalPrefixLen(pattern string) int {
+	length := 0
+	for length < len(pattern) {
+		char, size := decodeRune(pattern[length:])
+		switch char {
+		case utf8.RuneError, '*', '?', '[', '\\':
+			return length
+		}
+		length += size
+	}
+	return length
+}
+
+func indexLiteral(str, literal string, fold bool) (int, int) {
+	if fold {
+		return indexFold(str, literal)
+	}
+	index := strings.Index(str, literal)
+	if index < 0 {
+		return -1, 0
+	}
+	return index, len(literal)
+}
+
+func invalidLongPattern(pattern string) bool {
+	return len(pattern) >= 64 && strings.ContainsAny(pattern, `[\`) && !validPattern(pattern)
+}
+
+func validPattern(pattern string) bool {
+	for len(pattern) > 0 {
+		char, size := decodeRune(pattern)
+		switch char {
+		case '[':
+			consumed, _, valid := matchPatternClass(pattern[size:], 0, false)
+			if !valid {
+				return false
+			}
+			pattern = pattern[size+consumed:]
+			continue
+		case '\\':
+			pattern = pattern[size:]
+			if len(pattern) == 0 {
+				return false
+			}
+			_, size = decodeRune(pattern)
+		}
+		pattern = pattern[size:]
+	}
+	return true
 }
 
 // matchPatternClass parses pattern immediately after '[' and reports the
@@ -196,13 +272,7 @@ func matchPatternClass(pattern string, char rune, nocase bool) (int, bool, bool)
 			if start > end {
 				start, end = end, start
 			}
-			candidate := char
-			if nocase {
-				start = lowerRune(start)
-				end = lowerRune(end)
-				candidate = lowerRune(candidate)
-			}
-			if candidate >= start && candidate <= end {
+			if runeMatchesRange(char, start, end, nocase) {
 				matched = true
 			}
 			index = endIndex + endSize
@@ -217,14 +287,48 @@ func matchPatternClass(pattern string, char rune, nocase bool) (int, bool, bool)
 
 func runesMatch(a, b rune, nocase bool) bool {
 	if nocase {
-		return lowerRune(a) == lowerRune(b)
+		return runesEqualFold(a, b)
 	}
 	return a == b
+}
+
+func runesEqualFold(a, b rune) bool {
+	if a == b {
+		return true
+	}
+	if a <= unicode.MaxASCII && b <= unicode.MaxASCII {
+		return lowerASCIIRune(a) == lowerASCIIRune(b)
+	}
+	for folded := unicode.SimpleFold(a); folded != a; folded = unicode.SimpleFold(folded) {
+		if folded == b {
+			return true
+		}
+	}
+	return false
+}
+
+func runeMatchesRange(char, start, end rune, fold bool) bool {
+	if !fold {
+		return char >= start && char <= end
+	}
+	candidate := char
+	for {
+		if candidate >= start && candidate <= end {
+			return true
+		}
+		candidate = unicode.SimpleFold(candidate)
+		if candidate == char {
+			return false
+		}
+	}
 }
 
 // stringmatch is kept as a straightforward reference implementation for
 // differential tests and fuzzing of the optimized matchers.
 func stringmatch(str, pattern string, nocase bool) bool {
+	if invalidLongPattern(pattern) {
+		return false
+	}
 	skipLongerMatches := false
 	return stringmatchImpl(str, pattern, nocase, &skipLongerMatches)
 }
@@ -284,11 +388,7 @@ func stringmatchImpl(str, pattern string, nocase bool, skipLongerMatches *bool) 
 					}
 					pattern = pattern[ps:]
 					pc, ps = decodeRune(pattern)
-					if !nocase {
-						if pc == sc {
-							matched = true
-						}
-					} else if lowerRune(pc) == lowerRune(sc) {
+					if runesMatch(pc, sc, nocase) {
 						matched = true
 					}
 				} else if pc == ']' {
@@ -298,24 +398,14 @@ func stringmatchImpl(str, pattern string, nocase bool, skipLongerMatches *bool) 
 					pattern = pattern[ps+1:]
 					pc, ps = decodeRune(pattern)
 					end := pc
-					c := sc
 					if start > end {
 						start, end = end, start
 					}
-					if nocase {
-						start = lowerRune(start)
-						end = lowerRune(end)
-						c = lowerRune(c)
-					}
-					if c >= start && c <= end {
+					if runeMatchesRange(sc, start, end, nocase) {
 						matched = true
 					}
 				} else {
-					if !nocase {
-						if pc == sc {
-							matched = true
-						}
-					} else if lowerRune(pc) == lowerRune(sc) {
+					if runesMatch(pc, sc, nocase) {
 						matched = true
 					}
 				}
@@ -339,11 +429,7 @@ func stringmatchImpl(str, pattern string, nocase bool, skipLongerMatches *bool) 
 			if ss == 0 {
 				return false
 			}
-			if !nocase {
-				if pc != sc {
-					return false
-				}
-			} else if lowerRune(pc) != lowerRune(sc) {
+			if !runesMatch(pc, sc, nocase) {
 				return false
 			}
 			str = str[ss:]
@@ -369,12 +455,16 @@ func decodeRune(s string) (rune, int) {
 	return r, size
 }
 
-func lowerRune(r rune) rune {
-	if r <= unicode.MaxASCII {
-		if r >= 'A' && r <= 'Z' {
-			return r + ('a' - 'A')
-		}
-		return r
+func lowerASCIIRune(r rune) rune {
+	if r >= 'A' && r <= 'Z' {
+		return r + ('a' - 'A')
 	}
-	return unicode.ToLower(r)
+	return r
+}
+
+func lowerASCIIByte(b byte) byte {
+	if b >= 'A' && b <= 'Z' {
+		return b + ('a' - 'A')
+	}
+	return b
 }

@@ -67,6 +67,8 @@ Patterns are flat-string globs, not path globs: `*` and `?` do not treat `/` spe
 
 Invalid patterns (for example an unclosed `[`) never match, both for the one-shot helpers and for `Compile`.
 
+Case-insensitive matching uses Unicode simple case folding, consistent with Go's `strings.EqualFold`. Folding remains one rune to one rune, so multi-rune expansions such as `ß` → `SS` do not match.
+
 ## Comparison
 
 | | redglob | [tidwall/match](https://github.com/tidwall/match) | [gobwas/glob](https://github.com/gobwas/glob) | [doublestar](https://github.com/bmatcuk/doublestar) | [`path.Match`](https://pkg.go.dev/path#Match) |

@@ -19,19 +19,17 @@ type Pattern struct {
 }
 
 type token struct {
-	kind   tokenKind
-	char   rune   // single-rune literal (tokenLiteral)
-	folded rune   // lower(char) for fold matching
-	lit    string // multi-rune literal run (tokenLiteralRun)
-	count  int    // consecutive '?' count (tokenAnyN)
-	class  *compiledClass
+	kind  tokenKind
+	char  rune   // single-rune literal (tokenLiteral)
+	lit   string // multi-rune literal run (tokenLiteralRun)
+	count int    // consecutive '?' count (tokenAnyN)
+	class *compiledClass
 }
 
-// compiledClass holds 128-bit membership maps for sensitive and folded ASCII.
-// The common single range is inline; larger classes allocate an overflow slice.
+// compiledClass holds a 128-bit membership map for ASCII. The common single
+// range is inline; larger classes allocate an overflow slice.
 type compiledClass struct {
 	bits       [2]uint64
-	foldedBits [2]uint64
 	rangeOne   charRange
 	ranges     []charRange
 	rangeCount int
@@ -50,8 +48,7 @@ const (
 )
 
 type charRange struct {
-	start, end             rune
-	foldedStart, foldedEnd rune
+	start, end rune
 }
 
 // Compile parses pattern for repeated matching. Invalid patterns compile to a
@@ -66,8 +63,10 @@ func Compile(pattern string) *Pattern {
 		p.prefix = pattern
 		return p
 	}
-	// Cap is a lower bound on tokens: one per meta char, plus room for runs.
-	p.tokens = make([]token, 0, len(pattern)/2+1)
+	// Most patterns compile to only a few tokens. Keep the initial allocation
+	// bounded so a long literal does not retain a token array many times larger
+	// than the pattern itself.
+	p.tokens = make([]token, 0, min(len(pattern)/2+1, 32))
 	var litBuf []byte
 	flushLit := func() {
 		if len(litBuf) == 0 {
@@ -75,16 +74,14 @@ func Compile(pattern string) *Pattern {
 		}
 		if len(litBuf) == 1 && litBuf[0] < utf8.RuneSelf {
 			p.tokens = append(p.tokens, token{
-				kind:   tokenLiteral,
-				char:   rune(litBuf[0]),
-				folded: lowerRune(rune(litBuf[0])),
+				kind: tokenLiteral,
+				char: rune(litBuf[0]),
 			})
 		} else if r, n := utf8.DecodeRune(litBuf); n == len(litBuf) && r != utf8.RuneError {
 			// Single well-formed non-ASCII rune.
 			p.tokens = append(p.tokens, token{
-				kind:   tokenLiteral,
-				char:   r,
-				folded: lowerRune(r),
+				kind: tokenLiteral,
+				char: r,
 			})
 		} else {
 			p.tokens = append(p.tokens, token{
@@ -101,9 +98,8 @@ func Compile(pattern string) *Pattern {
 		if char == utf8.RuneError && (len(raw) != 3 || raw != string(utf8.RuneError)) {
 			flushLit()
 			p.tokens = append(p.tokens, token{
-				kind:   tokenLiteral,
-				char:   utf8.RuneError,
-				folded: utf8.RuneError,
+				kind: tokenLiteral,
+				char: utf8.RuneError,
 			})
 			return
 		}
@@ -203,23 +199,36 @@ func (class *compiledClass) addRange(r charRange) {
 	class.rangeCount++
 }
 
-func (class *compiledClass) matchesRange(char rune, fold bool) bool {
+func (class *compiledClass) matchesRange(char rune) bool {
 	if class.rangeCount == 1 {
-		if fold {
-			return char >= class.rangeOne.foldedStart && char <= class.rangeOne.foldedEnd
-		}
 		return char >= class.rangeOne.start && char <= class.rangeOne.end
 	}
 	for _, r := range class.ranges {
-		if fold {
-			if char >= r.foldedStart && char <= r.foldedEnd {
-				return true
-			}
-		} else if char >= r.start && char <= r.end {
+		if char >= r.start && char <= r.end {
 			return true
 		}
 	}
 	return false
+}
+
+func (class *compiledClass) contains(char rune) bool {
+	if char <= unicode.MaxASCII {
+		return asciiBit(class.bits, byte(char))
+	}
+	return class.matchesRange(char)
+}
+
+func (class *compiledClass) matchesFold(char rune) bool {
+	candidate := char
+	for {
+		if class.contains(candidate) {
+			return true
+		}
+		candidate = unicode.SimpleFold(candidate)
+		if candidate == char {
+			return false
+		}
+	}
 }
 
 func addClassRangeBits(class *compiledClass, start, end rune) {
@@ -236,33 +245,6 @@ func addClassRangeBits(class *compiledClass, start, end rune) {
 			}
 		}
 	}
-
-	// Fold bitset must mirror stringmatch: lower the ordered endpoints and
-	// do NOT re-sort. If lower(start) > lower(end), the folded range is empty
-	// (e.g. [b-C] → endpoints C..b → folded c..b matches nothing).
-	foldedStart, foldedEnd := lowerRune(start), lowerRune(end)
-	if foldedStart <= foldedEnd {
-		lo, hi := foldedStart, foldedEnd
-		if lo < 0 {
-			lo = 0
-		}
-		if lo <= unicode.MaxASCII {
-			if hi > unicode.MaxASCII {
-				hi = unicode.MaxASCII
-			}
-			for r := lo; r <= hi; r++ {
-				setASCIIBit(&class.foldedBits, byte(r))
-			}
-		}
-	}
-
-	// Singleton non-ASCII that folds into ASCII (e.g. K → k). Only safe for
-	// single-code-point entries; multi-code ranges keep range-list matching.
-	if start == end && start > unicode.MaxASCII {
-		if folded := lowerRune(start); folded <= unicode.MaxASCII {
-			setASCIIBit(&class.foldedBits, byte(folded))
-		}
-	}
 }
 
 func setASCIIBit(bits *[2]uint64, b byte) {
@@ -275,10 +257,8 @@ func asciiBit(bits [2]uint64, b byte) bool {
 
 func newCharRange(start, end rune) charRange {
 	return charRange{
-		start:       start,
-		end:         end,
-		foldedStart: lowerRune(start),
-		foldedEnd:   lowerRune(end),
+		start: start,
+		end:   end,
 	}
 }
 
@@ -287,7 +267,8 @@ func (p *Pattern) Match(str string) bool {
 	return p.match(str, false)
 }
 
-// MatchFold reports whether str matches the compiled pattern, ignoring case.
+// MatchFold reports whether str matches the compiled pattern using Unicode
+// simple case folding.
 func (p *Pattern) MatchFold(str string) bool {
 	return p.match(str, true)
 }
@@ -297,7 +278,8 @@ func (p *Pattern) MatchBytes(b []byte) bool {
 	return p.Match(b2s(b))
 }
 
-// MatchBytesFold reports whether b matches the compiled pattern, ignoring case.
+// MatchBytesFold reports whether b matches the compiled pattern using Unicode
+// simple case folding.
 func (p *Pattern) MatchBytesFold(b []byte) bool {
 	return p.MatchFold(b2s(b))
 }
@@ -331,7 +313,7 @@ func (p *Pattern) match(str string, fold bool) bool {
 		return false
 	}
 	tokenIndex, stringIndex := 0, 0
-	starToken, starString := -1, 0
+	starToken, starString, starLiteral := -1, 0, -1
 	for stringIndex < len(str) || tokenIndex < len(tokens) {
 		if tokenIndex < len(tokens) {
 			tok := &tokens[tokenIndex]
@@ -341,6 +323,18 @@ func (p *Pattern) match(str string, fold bool) bool {
 					return true
 				}
 				starToken, starString = tokenIndex, stringIndex
+				starLiteral = -1
+				if tokenIndex+1 < len(tokens) && tokens[tokenIndex+1].kind == tokenLiteralRun {
+					starLiteral = tokenIndex + 1
+					index, width := indexLiteral(str[stringIndex:], tokens[starLiteral].lit, fold)
+					if index < 0 {
+						return false
+					}
+					starString += index
+					stringIndex = starString + width
+					tokenIndex += 2
+					continue
+				}
 				tokenIndex++
 				continue
 			case tokenAnyN:
@@ -378,6 +372,16 @@ func (p *Pattern) match(str string, fold bool) bool {
 		}
 		_, size := decodeRune(str[starString:])
 		starString += size
+		if starLiteral >= 0 {
+			index, width := indexLiteral(str[starString:], tokens[starLiteral].lit, fold)
+			if index < 0 {
+				return false
+			}
+			starString += index
+			stringIndex = starString + width
+			tokenIndex = starLiteral + 1
+			continue
+		}
 		stringIndex = starString
 		tokenIndex = starToken + 1
 	}
@@ -630,23 +634,18 @@ func matchLiteralStarsValidFold(str, pattern string) bool {
 // literal in str, and the number of bytes matched in str. It returns -1, 0 if
 // literal is not found.
 //
-// For ASCII needles, try a byte-oriented search first. That is sufficient for
-// pure-ASCII haystacks (the common Redis-key case). Only if that search misses
-// do we fall back to a rune walk, which is required for code points such as
-// U+212A (K) that case-fold onto ASCII letters.
+// Pure-ASCII inputs use a byte-oriented search. Haystacks containing non-ASCII
+// runes require a rune walk so the result is the first folded occurrence, not
+// merely the first ASCII occurrence after it (for example, K before K).
 func indexFold(str, literal string) (int, int) {
 	if len(literal) == 0 {
 		return 0, 0
 	}
-	if isASCII(literal) {
+	if isASCII(literal) && isASCII(str) {
 		if index := indexASCIIFold(str, literal); index >= 0 {
 			return index, len(literal)
 		}
-		// No ASCII placement matched. A non-ASCII rune in str may still fold
-		// onto the needle (e.g. K → k), so only then pay for a full rune scan.
-		if isASCII(str) {
-			return -1, 0
-		}
+		return -1, 0
 	}
 	for offset := 0; offset <= len(str); {
 		if width, matches := matchPrefixFold(str[offset:], literal); matches {
@@ -661,56 +660,77 @@ func indexFold(str, literal string) (int, int) {
 	return -1, 0
 }
 
-// indexASCIIFold finds literal in an ASCII haystack, ignoring ASCII case.
-// It jumps with strings.IndexByte on both cases of the first needle byte.
+// indexASCIIFold finds literal in an ASCII haystack, ignoring ASCII case. It
+// anchors comparisons on the least frequent literal byte in the haystack so a
+// repetitive prefix does not repeatedly rescan the whole literal.
 func indexASCIIFold(str, literal string) int {
 	n, m := len(str), len(literal)
 	if m > n {
 		return -1
 	}
-	first := literal[0]
-	firstLo := first
-	if firstLo >= 'A' && firstLo <= 'Z' {
-		firstLo += 'a' - 'A'
+	if m < 64 {
+		return indexASCIIFoldShort(str, literal)
 	}
-	// firstHi is the uppercase twin when first is a letter; otherwise unused.
-	firstHi := firstLo - ('a' - 'A')
-	letter := firstLo >= 'a' && firstLo <= 'z'
+
+	var frequencies [utf8.RuneSelf]int
+	for index := range len(str) {
+		frequencies[lowerASCIIByte(str[index])]++
+	}
+	anchor := 0
+	anchorFrequency := n + 1
+	for index := range len(literal) {
+		frequency := frequencies[lowerASCIIByte(literal[index])]
+		if frequency < anchorFrequency {
+			anchor = index
+			anchorFrequency = frequency
+		}
+	}
+	anchorByte := lowerASCIIByte(literal[anchor])
 	limit := n - m
-	for i := 0; i <= limit; {
-		var rel int
+	for start := 0; start <= limit; start++ {
+		if lowerASCIIByte(str[start+anchor]) == anchorByte && equalASCIIFold(str[start:start+m], literal) {
+			return start
+		}
+	}
+	return -1
+}
+
+func indexASCIIFoldShort(str, literal string) int {
+	n, m := len(str), len(literal)
+	first := literal[0]
+	firstLower := lowerASCIIByte(first)
+	firstUpper := firstLower - ('a' - 'A')
+	letter := firstLower >= 'a' && firstLower <= 'z'
+	limit := n - m
+	for index := 0; index <= limit; {
+		var relative int
 		if letter {
-			// Search for both cases; IndexByte is SIMD-backed on common arches.
-			lo := strings.IndexByte(str[i:], firstLo)
-			hi := strings.IndexByte(str[i:], firstHi)
+			lower := strings.IndexByte(str[index:], firstLower)
+			upper := strings.IndexByte(str[index:], firstUpper)
 			switch {
-			case lo < 0 && hi < 0:
+			case lower < 0 && upper < 0:
 				return -1
-			case lo < 0:
-				rel = hi
-			case hi < 0:
-				rel = lo
+			case lower < 0:
+				relative = upper
+			case upper < 0:
+				relative = lower
 			default:
-				if lo < hi {
-					rel = lo
-				} else {
-					rel = hi
-				}
+				relative = min(lower, upper)
 			}
 		} else {
-			rel = strings.IndexByte(str[i:], first)
-			if rel < 0 {
+			relative = strings.IndexByte(str[index:], first)
+			if relative < 0 {
 				return -1
 			}
 		}
-		i += rel
-		if i > limit {
+		index += relative
+		if index > limit {
 			return -1
 		}
-		if equalASCIIFold(str[i:i+m], literal) {
-			return i
+		if equalASCIIFold(str[index:index+m], literal) {
+			return index
 		}
-		i++
+		index++
 	}
 	return -1
 }
@@ -722,13 +742,7 @@ func equalASCIIFold(str, literal string) bool {
 		if sb == lb {
 			continue
 		}
-		if sb >= 'A' && sb <= 'Z' {
-			sb += 'a' - 'A'
-		}
-		if lb >= 'A' && lb <= 'Z' {
-			lb += 'a' - 'A'
-		}
-		if sb != lb {
+		if lowerASCIIByte(sb) != lowerASCIIByte(lb) {
 			return false
 		}
 	}
@@ -795,7 +809,7 @@ func matchASCIIFoldPrefixScalar(str, pattern string) (int, bool) {
 	consumed := 0
 	for consumed < len(str) && consumed < len(pattern) &&
 		str[consumed] < utf8.RuneSelf && pattern[consumed] < utf8.RuneSelf {
-		if lowerRune(rune(str[consumed])) != lowerRune(rune(pattern[consumed])) {
+		if lowerASCIIRune(rune(str[consumed])) != lowerASCIIRune(rune(pattern[consumed])) {
 			return 0, false
 		}
 		consumed++
@@ -813,7 +827,7 @@ func matchLiteralFold(str, literal string) bool {
 	for len(str) > 0 && len(literal) > 0 {
 		strChar, strSize := decodeRune(str)
 		literalChar, literalSize := decodeRune(literal)
-		if lowerRune(strChar) != lowerRune(literalChar) {
+		if !runesEqualFold(strChar, literalChar) {
 			return false
 		}
 		str = str[strSize:]
@@ -835,7 +849,7 @@ func matchPrefixFold(str, prefix string) (int, bool) {
 		}
 		strChar, strSize := decodeRune(str)
 		prefixChar, prefixSize := decodeRune(prefix)
-		if lowerRune(strChar) != lowerRune(prefixChar) {
+		if !runesEqualFold(strChar, prefixChar) {
 			return 0, false
 		}
 		str = str[strSize:]
@@ -848,7 +862,7 @@ func matchPrefixFold(str, prefix string) (int, bool) {
 func matchSuffixFold(str, suffix string) (int, bool) {
 	remaining := len(str)
 	for len(suffix) > 0 && remaining > 0 && str[remaining-1] < utf8.RuneSelf && suffix[len(suffix)-1] < utf8.RuneSelf {
-		if lowerRune(rune(str[remaining-1])) != lowerRune(rune(suffix[len(suffix)-1])) {
+		if lowerASCIIRune(rune(str[remaining-1])) != lowerASCIIRune(rune(suffix[len(suffix)-1])) {
 			return 0, false
 		}
 		remaining--
@@ -860,7 +874,7 @@ func matchSuffixFold(str, suffix string) (int, bool) {
 		}
 		strChar, strSize := utf8.DecodeLastRuneInString(str[:remaining])
 		suffixChar, suffixSize := utf8.DecodeLastRuneInString(suffix)
-		if lowerRune(strChar) != lowerRune(suffixChar) {
+		if !runesEqualFold(strChar, suffixChar) {
 			return 0, false
 		}
 		remaining -= strSize
@@ -873,7 +887,7 @@ func (p *Pattern) tokenMatches(t *token, char rune, fold bool) bool {
 	switch t.kind {
 	case tokenLiteral:
 		if fold {
-			return t.folded == lowerRune(char)
+			return runesEqualFold(t.char, char)
 		}
 		return t.char == char
 	case tokenAny:
@@ -882,18 +896,9 @@ func (p *Pattern) tokenMatches(t *token, char rune, fold bool) bool {
 		class := t.class
 		matched := false
 		if fold {
-			folded := lowerRune(char)
-			if folded <= unicode.MaxASCII && asciiBit(class.foldedBits, byte(folded)) {
-				matched = true
-			} else {
-				// Range fallback for non-ASCII folded chars and for singletons
-				// whose fold-into-ASCII bit may be missing from sparse scans.
-				matched = class.matchesRange(folded, true)
-			}
-		} else if char <= unicode.MaxASCII {
-			matched = asciiBit(class.bits, byte(char))
+			matched = class.matchesFold(char)
 		} else {
-			matched = class.matchesRange(char, false)
+			matched = class.contains(char)
 		}
 		return matched != class.negated
 	default:
