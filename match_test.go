@@ -687,6 +687,13 @@ func TestLiteralStarsFoldFastPath(t *testing.T) {
 		// Non-ASCII fold of Kelvin inside a long haystack.
 		{longPad + "KELVIN" + longPad, "*kelvin*", true},
 		{longPad + "KELVIN" + longPad, "*Kelvin*", true},
+		// An immediate folded hit must consume input bytes, not pattern bytes.
+		{"K" + longPad + "Z", "*k*" + longPad + "z", true},
+		{"K" + longPad + "Z", "*K*" + longPad + "z", true},
+		// Keep the earliest hit so later segments still have enough input.
+		{"K" + longPad + "KZ", "*k*" + longPad + "kz", true},
+		{strings.Repeat("A", 128), "*" + strings.Repeat("a", 64) + "*" + strings.Repeat("a", 64) + "*", true},
+		{strings.Repeat("A", 127), "*" + strings.Repeat("a", 64) + "*" + strings.Repeat("a", 64) + "*", false},
 		// Invalid UTF-8 must stay equivalent to the reference matcher.
 		{strings.Repeat("A", 64) + string([]byte{0xfe}) + "Z", "a*" + string([]byte{0xff}) + "*z", true},
 	}
@@ -834,6 +841,11 @@ func BenchmarkLiteralStarsFold(b *testing.B) {
 		{"Hit", "START" + pad + "MID" + pad + "END", "start*mid*end", true},
 		{"Miss", "START" + pad + "MAD" + pad + "END", "start*mid*end", false},
 		{"SensitiveHit", "start" + pad + "mid" + pad + "end", "start*mid*end", true},
+		{"Immediate1", strings.Repeat("A", 65536), "*" + strings.Repeat("a", 64) + "*", true},
+		{"Immediate16", strings.Repeat("A", 65536), "*" + strings.Repeat(strings.Repeat("a", 64)+"*", 16), true},
+		{"Immediate64", strings.Repeat("A", 65536), "*" + strings.Repeat(strings.Repeat("a", 64)+"*", 64), true},
+		{"LongMiss", strings.Repeat("A", 65536), "*" + strings.Repeat("a", 63) + "b*", false},
+		{"UnicodeMiss", strings.Repeat("A", 16384), "*" + strings.Repeat("a", 63) + "界*", false},
 	}
 	for _, tt := range cases {
 		b.Run(tt.name, func(b *testing.B) {

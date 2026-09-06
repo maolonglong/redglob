@@ -640,6 +640,10 @@ func indexFold(str, literal string) (int, int) {
 	if len(literal) == 0 {
 		return 0, 0
 	}
+	// Immediate hits need no whole-haystack ASCII or frequency scan.
+	if width, matches := matchPrefixFold(str, literal); matches {
+		return 0, width
+	}
 	if isASCII(literal) && isASCII(str) {
 		if index := indexASCIIFold(str, literal); index >= 0 {
 			return index, len(literal)
