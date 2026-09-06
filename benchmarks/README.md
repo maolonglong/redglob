@@ -29,7 +29,7 @@ Longer inputs (`BenchmarkMatchFoldASCIILength`, `BenchmarkLongMultiStar`, `Bench
 
 Cross-library rankings skip cases where semantics diverge: negated classes, path separators, malformed patterns, and non-ASCII case folding.
 
-Unicode `?` matching is reported in its own set of benches and omits gobwas/glob. Its fixed-length optimization treats `?` as one byte in some paths, so `a?b` does not match `a界b` the way redglob does.
+Unicode `?` matching is included in the common cases: gobwas/glob v1.0.0 correctly matches `a?b` against `a界b`, so it no longer needs to be excluded from this comparison.
 
 ## Running
 
