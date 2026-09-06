@@ -77,9 +77,9 @@ Case-insensitive matching uses Unicode simple case folding, consistent with Go's
 | `*` / `?` | Characters (not path segments) | Characters | Configurable | Path-aware | Path-aware |
 | Character classes `[…]` | Yes | No | Yes | Yes | Yes |
 | Unicode runes | Yes (`?` is one rune) | Yes | Partial (`?` is byte-oriented in places) | Yes | Yes |
-| Case-insensitive | `MatchFold` / `MatchBytesFold` | `MatchNoCase` | Separators / options | Via FS layer | No |
+| Case-insensitive | `MatchFold` / `MatchBytesFold` | `MatchNoCase` | No | Via FS layer | No |
 | `[]byte` API | Yes (zero-copy) | No | `Match` on string | No | No |
-| Compile API | `Compile` → `*Pattern` | One-shot only | `Compile` → `Glob` | Optional | One-shot only |
+| Compile API | `Compile` → `*Pattern` | One-shot only | `Compile` → `Glob` | No compile API | One-shot only |
 | Invalid pattern | Never matches | — | Error on compile | Error / unvalidated | Error |
 | Runtime deps / Cgo | None | None | None | None | Stdlib |
 
@@ -94,6 +94,8 @@ Case-insensitive matching uses Unicode simple case folding, consistent with Go's
 - For **compile-once, match-many** simple prefixes/suffixes, gobwas is often a few nanoseconds faster in the steady state.
 - On short `?`-heavy ASCII patterns, tidwall can win the one-shot race (it does less work and does not implement classes).
 - doublestar / `path.Match` are the right tools when you need **path** semantics (`/` boundaries, `**`, etc.).
+
+The doublestar benchmarks use `MatchUnvalidated`, which skips part of pattern validation for the suite's known-valid patterns; doublestar does not provide a compile API.
 
 ## Performance
 

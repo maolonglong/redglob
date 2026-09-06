@@ -414,7 +414,7 @@ func TestWildcardMatch_tidwall(t *testing.T) {
 }
 
 func BenchmarkAscii(t *testing.B) {
-	for i := 0; i < t.N; i++ {
+	for t.Loop() {
 		if !Match("hello", "hello") {
 			t.Fatal("fail")
 		}
@@ -422,7 +422,7 @@ func BenchmarkAscii(t *testing.B) {
 }
 
 func BenchmarkUnicode(t *testing.B) {
-	for i := 0; i < t.N; i++ {
+	for t.Loop() {
 		if !Match("h情llo", "h情llo") {
 			t.Fatal("fail")
 		}

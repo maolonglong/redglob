@@ -92,10 +92,9 @@ func Compile(pattern string) *Pattern {
 		litBuf = litBuf[:0]
 	}
 	appendLiteral := func(char rune, raw string) {
-		// Invalid UTF-8 is decoded as RuneError with size 1. Matching is by
-		// rune identity (any invalid byte matches any other), so these must
-		// stay as single-rune tokens and must not merge into byte runs.
-		if char == utf8.RuneError && (len(raw) != 3 || raw != string(utf8.RuneError)) {
+		// Both U+FFFD and invalid UTF-8 match by RuneError identity, not by
+		// encoding. Keep them out of byte-oriented literal runs.
+		if char == utf8.RuneError {
 			flushLit()
 			p.tokens = append(p.tokens, token{
 				kind: tokenLiteral,
@@ -699,31 +698,22 @@ func indexASCIIFoldShort(str, literal string) int {
 	n, m := len(str), len(literal)
 	first := literal[0]
 	firstLower := lowerASCIIByte(first)
-	firstUpper := firstLower - ('a' - 'A')
 	letter := firstLower >= 'a' && firstLower <= 'z'
 	limit := n - m
 	for index := 0; index <= limit; {
-		var relative int
 		if letter {
-			lower := strings.IndexByte(str[index:], firstLower)
-			upper := strings.IndexByte(str[index:], firstUpper)
-			switch {
-			case lower < 0 && upper < 0:
-				return -1
-			case lower < 0:
-				relative = upper
-			case upper < 0:
-				relative = lower
-			default:
-				relative = min(lower, upper)
+			// Search both cases in one pass; separate searches can repeatedly
+			// scan the entire suffix when one case is absent.
+			for index <= limit && lowerASCIIByte(str[index]) != firstLower {
+				index++
 			}
 		} else {
-			relative = strings.IndexByte(str[index:], first)
+			relative := strings.IndexByte(str[index:], first)
 			if relative < 0 {
 				return -1
 			}
+			index += relative
 		}
-		index += relative
 		if index > limit {
 			return -1
 		}

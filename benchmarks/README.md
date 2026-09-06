@@ -23,6 +23,8 @@ The suite splits three costs on purpose:
 2. Compilation cost
 3. Steady-state matching on an already compiled pattern
 
+doublestar has no compile API. Its benchmark cases use `MatchUnvalidated`, which skips part of pattern validation for the suite's known-valid patterns.
+
 Longer inputs (`BenchmarkMatchFoldASCIILength`, `BenchmarkLongMultiStar`, `BenchmarkMatchBytes`) call `b.SetBytes` so results include MB/s throughput. `BenchmarkMatchBytes` covers the `[]byte` APIs (`MatchBytes` / `MatchBytesFold` and their compiled forms).
 
 Cross-library rankings skip cases where semantics diverge: negated classes, path separators, malformed patterns, and non-ASCII case folding.

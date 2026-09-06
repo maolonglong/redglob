@@ -172,6 +172,21 @@ var tests = []struct {
 		args{"", "***"},
 		true,
 	},
+	// A replacement rune and an invalid UTF-8 byte have the same rune identity.
+	{args{"\xff", "\uFFFD"}, true},
+	{args{"a\xffb", "a\uFFFDb"}, true},
+	{args{"\uFFFD", "\xff"}, true},
+	{args{"prefix\xff", "*\uFFFD"}, true},
+	{args{"\xfftail", "\uFFFD*"}, true},
+	{args{"prefix\xfftail", "*\uFFFD*"}, true},
+	{args{"x\xff", "?\uFFFD"}, true},
+	{args{"\xff", "\\\uFFFD"}, true},
+	{args{"\xff", "[\uFFFD]"}, true},
+	{args{"\xff", "[^\uFFFD]"}, false},
+	{args{"\xff\xfe", "\uFFFD"}, false},
+	{args{"x", "\uFFFD"}, false},
+	{args{"\xff", "\uFFFD["}, false},
+	{args{"\xff", "\uFFFD\\"}, false},
 }
 
 // longPad is long enough to enter the len(str) >= 64 multi-star fast path.
@@ -314,6 +329,7 @@ func TestMatch(t *testing.T) {
 
 func TestMatchFold(t *testing.T) {
 	for _, tt := range tests {
+		checkMatchFoldAPIs(t, tt.args.str, tt.args.pattern, tt.want)
 		str := strings.ToUpper(tt.args.str)
 		checkMatchFoldAPIs(t, str, tt.args.pattern, tt.want)
 	}
@@ -388,11 +404,9 @@ func TestPatternConcurrent(t *testing.T) {
 
 	var wg sync.WaitGroup
 	errCh := make(chan string, goroutines)
-	for i := 0; i < goroutines; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for n := 0; n < iterations; n++ {
+	for range goroutines {
+		wg.Go(func() {
+			for range iterations {
 				hit := "user:42:profile"
 				miss := "admin:42:profile"
 				if !pattern.Match(hit) || pattern.Match(miss) {
@@ -408,7 +422,7 @@ func TestPatternConcurrent(t *testing.T) {
 					return
 				}
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	close(errCh)
@@ -614,6 +628,24 @@ func TestStarLiteralSearch(t *testing.T) {
 	checkMatchFoldAPIs(t, strings.Repeat("a", 1024)+"x", foldPattern, false)
 }
 
+func TestShortLiteralFoldSearch(t *testing.T) {
+	for _, tt := range []struct {
+		str, pattern string
+		want         bool
+	}{
+		{strings.Repeat("a", 1024), "*ab*", false},
+		{strings.Repeat("A", 1024), "*ab*", false},
+		{strings.Repeat("aA", 512) + "B", "*ab*", true},
+		{"ABxxab", "*ab??ab", true},
+		{"xxAB", "*ab", true},
+		{"A", "*ab*", false},
+		{"--x--Y", "*--y*", true},
+		{"KxxKz", "*k??k?", true},
+	} {
+		checkMatchFoldAPIs(t, tt.str, tt.pattern, tt.want)
+	}
+}
+
 func tokenKinds(tokens []token) []tokenKind {
 	out := make([]tokenKind, len(tokens))
 	for i, tok := range tokens {
@@ -743,14 +775,14 @@ func BenchmarkRepeatedMatch(b *testing.B) {
 		b.Run(tt.name, func(b *testing.B) {
 			compiled := Compile(tt.pattern)
 			b.Run("Direct", func(b *testing.B) {
-				for i := 0; i < b.N; i++ {
+				for b.Loop() {
 					if got := Match(tt.str, tt.pattern); got != tt.want {
 						b.Fatalf("Match() = %v, want %v", got, tt.want)
 					}
 				}
 			})
 			b.Run("Compiled", func(b *testing.B) {
-				for i := 0; i < b.N; i++ {
+				for b.Loop() {
 					if got := compiled.Match(tt.str); got != tt.want {
 						b.Fatalf("Pattern.Match() = %v, want %v", got, tt.want)
 					}
@@ -763,7 +795,7 @@ func BenchmarkRepeatedMatch(b *testing.B) {
 func BenchmarkCompile(b *testing.B) {
 	for _, tt := range benchmarkCases {
 		b.Run(tt.name, func(b *testing.B) {
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				Compile(tt.pattern)
 			}
 		})
@@ -776,14 +808,14 @@ func BenchmarkRepeatedMatchFold(b *testing.B) {
 		b.Run(tt.name, func(b *testing.B) {
 			compiled := Compile(tt.pattern)
 			b.Run("Direct", func(b *testing.B) {
-				for i := 0; i < b.N; i++ {
+				for b.Loop() {
 					if got := MatchFold(str, tt.pattern); got != tt.want {
 						b.Fatalf("MatchFold() = %v, want %v", got, tt.want)
 					}
 				}
 			})
 			b.Run("Compiled", func(b *testing.B) {
-				for i := 0; i < b.N; i++ {
+				for b.Loop() {
 					if got := compiled.MatchFold(str); got != tt.want {
 						b.Fatalf("Pattern.MatchFold() = %v, want %v", got, tt.want)
 					}
@@ -808,7 +840,7 @@ func BenchmarkLiteralStarsFold(b *testing.B) {
 			compiled := Compile(tt.pattern)
 			b.Run("DirectFold", func(b *testing.B) {
 				b.ReportAllocs()
-				for i := 0; i < b.N; i++ {
+				for b.Loop() {
 					if got := MatchFold(tt.str, tt.pattern); got != tt.want {
 						b.Fatalf("MatchFold() = %v, want %v", got, tt.want)
 					}
@@ -816,7 +848,7 @@ func BenchmarkLiteralStarsFold(b *testing.B) {
 			})
 			b.Run("CompiledFold", func(b *testing.B) {
 				b.ReportAllocs()
-				for i := 0; i < b.N; i++ {
+				for b.Loop() {
 					if got := compiled.MatchFold(tt.str); got != tt.want {
 						b.Fatalf("Pattern.MatchFold() = %v, want %v", got, tt.want)
 					}
@@ -825,7 +857,7 @@ func BenchmarkLiteralStarsFold(b *testing.B) {
 			if tt.name == "SensitiveHit" {
 				b.Run("Direct", func(b *testing.B) {
 					b.ReportAllocs()
-					for i := 0; i < b.N; i++ {
+					for b.Loop() {
 						if got := Match(tt.str, tt.pattern); got != tt.want {
 							b.Fatalf("Match() = %v, want %v", got, tt.want)
 						}
@@ -833,7 +865,7 @@ func BenchmarkLiteralStarsFold(b *testing.B) {
 				})
 				b.Run("Compiled", func(b *testing.B) {
 					b.ReportAllocs()
-					for i := 0; i < b.N; i++ {
+					for b.Loop() {
 						if got := compiled.Match(tt.str); got != tt.want {
 							b.Fatalf("Pattern.Match() = %v, want %v", got, tt.want)
 						}
@@ -850,7 +882,7 @@ func BenchmarkOneShotQuestionRuns(b *testing.B) {
 		pattern := strings.Repeat("?", count)
 		b.Run(fmt.Sprintf("ASCII%d", count), func(b *testing.B) {
 			b.ReportAllocs()
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				if !Match(str, pattern) {
 					b.Fatal("question run did not match")
 				}
@@ -897,4 +929,30 @@ func BenchmarkStarLiteralMiss(b *testing.B) {
 			}
 		}
 	})
+}
+
+func BenchmarkShortLiteralFoldMiss(b *testing.B) {
+	const pattern = "*ab*"
+	compiled := Compile(pattern)
+	for _, size := range []int{32 << 10, 64 << 10, 128 << 10, 256 << 10} {
+		str := strings.Repeat("a", size)
+		b.Run(fmt.Sprint(size), func(b *testing.B) {
+			b.Run("Direct", func(b *testing.B) {
+				b.SetBytes(int64(size))
+				for b.Loop() {
+					if MatchFold(str, pattern) {
+						b.Fatal("unexpected match")
+					}
+				}
+			})
+			b.Run("Compiled", func(b *testing.B) {
+				b.SetBytes(int64(size))
+				for b.Loop() {
+					if compiled.MatchFold(str) {
+						b.Fatal("unexpected match")
+					}
+				}
+			})
+		})
+	}
 }
