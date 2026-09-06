@@ -1,106 +1,51 @@
 # AGENTS.md
 
-## Project
+## Project contracts
 
 Redglob is a pure-Go Redis-style glob matcher (`*`, `?`, character classes) with Unicode support and optional case-insensitive matching.
 
-Hard constraints:
+- Keep the root module dependency-free: `go list -m all` must return a single module line. No Cgo.
+- Invalid patterns (e.g. unclosed `[`) never match, through either one-shot helpers or compiled patterns.
+- These are flat-string globs, not path globs: `*` and `?` do not treat `/` specially.
+- Preserve Unicode correctness and Redis-style semantics when optimizing hot paths.
+- Keep the public API stable and minimal: `Match`, `MatchFold`, `MatchBytes`, `MatchBytesFold`, and `Compile` → concurrency-safe `*Pattern`. Prefer one-shot helpers for single checks and `Compile` for reuse.
+- Cross-library comparison code and dependencies belong only in the separate `benchmarks/` module; do not vendor them into the root module.
+- Experimental SIMD (`fold_simd.go`, tagged `go1.27 && goexperiment.simd`) must remain behaviorally equivalent to the scalar path (`fold.go`), without API changes or added dependencies.
 
-- No third-party runtime dependencies in the root module (`go list -m all` must stay a single module line).
-- No Cgo.
-- Invalid patterns (e.g. unclosed `[`) never match, for both one-shot helpers and `Compile`.
-- Patterns are flat-string globs, not path globs: `*` / `?` do not treat `/` specially.
+## Development
 
-Public API surface is intentionally small: `Match`, `MatchFold`, `MatchBytes`, `MatchBytesFold`, and `Compile` → `*Pattern` (concurrency-safe). Prefer package-level functions for one-off checks; use `Compile` when the same pattern is reused.
+Go requirements and tool versions live in `go.mod`, `mise.toml`, and `.golangci-lint-version`. Formatting and lint rules live in `.golangci.yml`.
 
-## Tooling
-
-- Go `1.26.x` (see `go.mod` / `mise.toml`)
-- Task runner: `just`
-- Lint/format: `golangci-lint` (config `.golangci.yml`, version pin `.golangci-lint-version`)
-- Formatters: `gofumpt` + `goimports` (local prefix `github.com/maolonglong/redglob`)
-- Dev tools can also be installed via `mise` (see `.agents/setup`)
-
-## Commands
-
-Prefer `just` targets:
+Prefer the existing `justfile` targets:
 
 ```sh
-just deps    # install golangci-lint at the pinned version
-just fmt     # golangci-lint fmt (gofumpt + goimports)
-just lint    # golangci-lint run
-just test    # go test -v -race -count=1 ./...
-just check   # fmt + lint + test
-just fuzz    # go test -fuzz=Fuzz .
+just deps    # install the pinned golangci-lint
+just fmt     # format files in place
+just lint    # run lint checks
+just test    # run tests with the race detector, without cached results
+just check   # fmt + lint + test; modifies formatting in place
+just fuzz    # open-ended fuzzing; stop manually
 ```
 
-Equivalent direct commands:
+Godoc examples belong in `match_example_test.go` (`package redglob_test`) with working `Output:` blocks.
 
-```sh
-go test -race -count=1 ./...
-golangci-lint run
-golangci-lint fmt
-```
+## Verification by change scope
 
-CI also runs `go test` with `-shuffle=on` and coverage on Linux/macOS/Windows. After dependency edits, keep modules tidy:
+- Documentation-only changes: check accuracy and the diff; no Go test run is needed.
+- Go code changes: run `just check`. For matching behavior changes, cover both one-shot and compiled APIs, including affected invalid-pattern and case-fold variants. Consider a bounded fuzz run for parser or matcher changes: `go test -fuzz=Fuzz -fuzztime=30s .`.
+- Fold/SIMD changes: also test hardware and emulated SIMD with a Go 1.27+ toolchain supporting the experiment; report if unavailable:
 
-```sh
-go mod tidy
-git diff --exit-code -- go.mod go.sum
-```
+  ```sh
+  GOEXPERIMENT=simd go test -count=1 ./...
+  GODEBUG=simd=0 GOEXPERIMENT=simd go test -count=1 ./...
+  ```
 
-### Benchmarks module
+- Benchmark changes: run `CGO_ENABLED=0 go test ./...` from `benchmarks/`. For performance comparisons, run `CGO_ENABLED=0 go test -run '^$' -bench . -benchmem -count 5` there.
+- Module/dependency changes: run `go mod tidy` in the affected module and review the resulting diff; intentional module edits are not failures. Confirm the root still has a single module and no Cgo dependencies:
 
-Cross-library benchmarks live in a **separate** module under `benchmarks/` so comparison deps never enter the root `go.mod`.
+  ```sh
+  go list -m all
+  go list -deps -f '{{if .CgoFiles}}{{.ImportPath}}{{end}}' .
+  ```
 
-```sh
-cd benchmarks
-CGO_ENABLED=0 go test ./...
-CGO_ENABLED=0 go test -run '^$' -bench . -benchmem -count 5
-```
-
-Do not add benchmark-only dependencies to the root module.
-
-### Experimental SIMD
-
-`fold_simd.go` is build-tagged `go1.27 && goexperiment.simd`; the scalar fallback is `fold.go`. SIMD is optional and must not change API or add deps.
-
-```sh
-GOEXPERIMENT=simd go test -count=1 ./...
-```
-
-Requires a Go 1.27+ toolchain. Keep scalar and SIMD paths behaviorally equivalent.
-
-## Layout
-
-| Path | Role |
-| --- | --- |
-| `match.go` | One-shot match entry points and core matcher |
-| `pattern.go` | `Compile` / `*Pattern` tokenized matcher |
-| `fold.go` / `fold_simd.go` | Case-fold helpers (scalar vs experimental SIMD) |
-| `bytesconv*.go` | `[]byte` ↔ `string` helpers (version-tagged) |
-| `*_test.go` | Unit, fuzz, and compatibility tests |
-| `match_example_test.go` | Godoc examples (`package redglob_test`) |
-| `testdata/fuzz/` | Fuzz corpora |
-| `benchmarks/` | Isolated comparison benchmark module |
-| `.github/workflows/go.yml` | Lint, multi-OS test, benchmarks, SIMD CI |
-
-## Code conventions
-
-- Keep the public API stable and minimal; avoid new exports unless necessary.
-- Match existing style; let `gofumpt` / `goimports` / `golangci-lint` enforce formatting and lint.
-- No naked returns (`nakedret` max-func-lines: 0).
-- Optimize hot paths carefully; preserve Unicode correctness and Redis-style semantics.
-- Tests should cover both `Match*` helpers and `Compile`/`*Pattern`, including invalid patterns and fold variants.
-- Example tests belong in `package redglob_test` and must keep working `Output:` blocks.
-- Do not vendor comparison libraries into the root module; put them under `benchmarks/` only.
-
-## Verification checklist
-
-Before finishing a change:
-
-1. `just check` (or at least `just test` + `just lint`)
-2. If you touched matching semantics: run relevant tests and consider `just fuzz` for longer sessions
-3. If you touched fold/SIMD: also run `GOEXPERIMENT=simd go test -count=1 ./...` when a 1.27+ toolchain is available
-4. If you touched benchmarks: `cd benchmarks && CGO_ENABLED=0 go test ./...`
-5. Confirm root module still has zero third-party deps and no Cgo
+CI coverage and toolchain details live in `.github/workflows/go.yml`.

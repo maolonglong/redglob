@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "skills": {
+    "modular-go": {
+      "source": "PsiACE/skills",
+      "sourceType": "github",
+      "skillPath": "skills/modular-go/SKILL.md",
+      "computedHash": "d93eb54e08441d2208c667731f1212cacca296f03e0d13cab172a2352cc7cc47"
+    },
+    "use-modern-go": {
+      "source": "JetBrains/go-modern-guidelines",
+      "sourceType": "github",
+      "skillPath": "plugin/skills/use-modern-go/SKILL.md",
+      "computedHash": "c308fc949fc8a369b5ea0f2d57072789eda8d05f420b972c67576b285b7ba539"
+    }
+  }
+}
