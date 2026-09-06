@@ -29,6 +29,11 @@ just fuzz    # open-ended fuzzing; stop manually
 
 Godoc examples belong in `match_example_test.go` (`package redglob_test`) with working `Output:` blocks.
 
+## Commits
+
+- Use Conventional Commits: `<type>(<scope>): <summary>` (imperative, <= 72 chars, no trailing period).
+- **Always write a commit body** explaining the *why* (bullets welcome), not just the *what*.
+
 ## Verification by change scope
 
 - Documentation-only changes: check accuracy and the diff; no Go test run is needed.
