@@ -16,7 +16,7 @@ import (
 var (
 	matchResult     bool
 	compileError    error
-	compiledGobwas  glob.Glob
+	compiledGobwas  *glob.Pattern
 	compiledRedglob *redglob.Pattern
 )
 
@@ -34,6 +34,7 @@ var commonCases = []matchCase{
 	{"SuffixStar", "*:profile", "customer:1234567890:profile", true},
 	{"InfixStar", "customer:*:profile", "customer:1234567890:profile", true},
 	{"QuestionASCII", "file-??.txt", "file-ab.txt", true},
+	{"UnicodeQuestion", "a?b", "a界b", true},
 	{"UnicodeStar", "前*後", "前中間後", true},
 	{"MultiStar", "a*b*c*d*e", "axbxcxdxe", true},
 	{"BacktrackingMiss", "a*a*a*a*b", "aaaaaaaaaaaaaaaaaac", false},
@@ -345,45 +346,6 @@ func TestBenchmarkSemantics(t *testing.T) {
 			assertMatch(t, gobwasPattern.Match(tc.input), tc.want)
 		})
 	}
-}
-
-func BenchmarkUnicodeQuestion(b *testing.B) {
-	const pattern = "a?b"
-	const input = "a界b"
-	redglobPattern := redglob.Compile(pattern)
-
-	assertMatch(b, redglob.Match(input, pattern), true)
-	assertMatch(b, redglobPattern.Match(input), true)
-	assertMatch(b, tidwall.Match(input, pattern), true)
-	assertMatch(b, doublestar.MatchUnvalidated(pattern, input), true)
-	stdlibResult, err := path.Match(pattern, input)
-	assertMatchError(b, stdlibResult, err, true)
-
-	b.Run("Redglob", func(b *testing.B) {
-		for b.Loop() {
-			matchResult = redglob.Match(input, pattern)
-		}
-	})
-	b.Run("RedglobCompiled", func(b *testing.B) {
-		for b.Loop() {
-			matchResult = redglobPattern.Match(input)
-		}
-	})
-	b.Run("Tidwall", func(b *testing.B) {
-		for b.Loop() {
-			matchResult = tidwall.Match(input, pattern)
-		}
-	})
-	b.Run("DoublestarUnvalidated", func(b *testing.B) {
-		for b.Loop() {
-			matchResult = doublestar.MatchUnvalidated(pattern, input)
-		}
-	})
-	b.Run("StandardLibrary", func(b *testing.B) {
-		for b.Loop() {
-			matchResult, compileError = path.Match(pattern, input)
-		}
-	})
 }
 
 func assertMatch(t testing.TB, got, want bool) {

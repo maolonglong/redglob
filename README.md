@@ -76,10 +76,10 @@ Case-insensitive matching uses Unicode simple case folding, consistent with Go's
 | Style | Redis flat-string glob | Redis-like flat string | Compile-once glob | Path glob (`**`, `/`) | Stdlib path glob |
 | `*` / `?` | Characters (not path segments) | Characters | Configurable | Path-aware | Path-aware |
 | Character classes `[…]` | Yes | No | Yes | Yes | Yes |
-| Unicode runes | Yes (`?` is one rune) | Yes | Partial (`?` is byte-oriented in places) | Yes | Yes |
+| Unicode runes | Yes (`?` is one rune) | Yes | Yes (v1.0.0) | Yes | Yes |
 | Case-insensitive | `MatchFold` / `MatchBytesFold` | `MatchNoCase` | No | Via FS layer | No |
 | `[]byte` API | Yes (zero-copy) | No | `Match` on string | No | No |
-| Compile API | `Compile` → `*Pattern` | One-shot only | `Compile` → `Glob` | No compile API | One-shot only |
+| Compile API | `Compile` → `*Pattern` | One-shot only | `Compile` → `*Pattern` | No compile API | One-shot only |
 | Invalid pattern | Never matches | — | Error on compile | Error / unvalidated | Error |
 | Runtime deps / Cgo | None | None | None | None | Stdlib |
 
@@ -91,7 +91,7 @@ Case-insensitive matching uses Unicode simple case folding, consistent with Go's
 
 **Trade-offs**
 
-- For **compile-once, match-many** simple prefixes/suffixes, gobwas is often a few nanoseconds faster in the steady state.
+- Compiled matching depends on the pattern: redglob leads on literals and single-star cases in this suite, while gobwas is faster on the backtracking-miss case.
 - On short `?`-heavy ASCII patterns, tidwall can win the one-shot race (it does less work and does not implement classes).
 - doublestar / `path.Match` are the right tools when you need **path** semantics (`/` boundaries, `**`, etc.).
 
@@ -99,7 +99,7 @@ The doublestar benchmarks use `MatchUnvalidated`, which skips part of pattern va
 
 ## Performance
 
-Numbers below are median `ns/op` from the isolated [`benchmarks`](benchmarks) module on an Apple M1 Pro (`darwin/arm64`), Go 1.26, `CGO_ENABLED=0`, `-count 5`. Re-run anytime:
+Numbers below are median `ns/op` from the isolated [`benchmarks`](benchmarks) module in an Amp orb with an Intel Xeon @ 2.60 GHz (2 vCPUs, `linux/amd64`), Go 1.26.5, `CGO_ENABLED=0`, `-count 5`. Dependency versions: gobwas/glob v1.0.0, tidwall/match v1.2.0, doublestar/v4 v4.10.0. Results are specific to this environment; the experimental SIMD section lists its own environment. Re-run anytime:
 
 ```sh
 cd benchmarks
@@ -112,52 +112,56 @@ Gobwas is measured as compile+match because it has no one-shot API. tidwall has 
 
 | Case | Pattern sketch | redglob | tidwall | doublestar | `path.Match` | gobwas (compile+match) |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| Literal match | `customer:123…` | **14** | 50 | 76 | 71 | 520 |
-| Literal miss | same, last digit differs | **30** | 50 | 75 | 71 | 519 |
-| Prefix `*` | `customer:*` | **17** | 25 | 53 | 41 | 553 |
-| Suffix `*` | `*:profile` | **17** | 37 | 150 | 430 | 504 |
-| Infix `*` | `customer:*:profile` | **28** | 58 | 128 | 283 | 893 |
-| ASCII `?` | `file-??.txt` | 65 | **28** | 46 | 44 | 1189 |
-| Unicode `*` | `前*後` | **16** | 27 | 49 | 108 | 726 |
-| Multi `*` | `a*b*c*d*e` | 84 | 72 | **53** | 63 | 2287 |
-| Backtracking miss | `a*a*a*a*b` vs long `a…c` | 18 | **12** | 108 | 118 | 2230 |
+| Literal match | `customer:123…` | **23** | 70 | 142 | 84 | 673 |
+| Literal miss | same, last digit differs | **42** | 67 | 133 | 86 | 649 |
+| Prefix `*` | `customer:*` | **24** | 38 | 95 | 52 | 702 |
+| Suffix `*` | `*:profile` | **23** | 55 | 228 | 562 | 640 |
+| Infix `*` | `customer:*:profile` | **40** | 86 | 210 | 357 | 980 |
+| ASCII `?` | `file-??.txt` | 90 | **43** | 73 | 52 | 945 |
+| Unicode `?` | `a?b` vs `a界b` | 39 | **17** | 26 | 23 | 732 |
+| Unicode `*` | `前*後` | **24** | 37 | 73 | 116 | 752 |
+| Multi `*` | `a*b*c*d*e` | 113 | 106 | **80** | 84 | 2086 |
+| Backtracking miss | `a*a*a*a*b` vs long `a…c` | 28 | **16** | 174 | 152 | 1606 |
 
-Takeaway: on the Redis-like hot path (literals and single-star prefix/suffix/infix), redglob is typically **1.5–3.5×** faster than tidwall and far ahead of path-oriented matchers and gobwas-when-you-must-compile-every-time. All redglob one-shot paths above are **0 allocs/op**.
+Takeaway: on the Redis-like hot path (literals and single-star prefix/suffix/infix), redglob is **1.6–3.0×** faster than tidwall in these measurements, and faster than path-oriented matchers and gobwas-when-you-must-compile-every-time. All redglob one-shot paths above are **0 allocs/op**.
 
 ### Compiled match (steady state)
 
 | Case | redglob | gobwas |
 | --- | ---: | ---: |
-| Literal match | **2.9** | 4.2 |
-| Prefix / suffix / infix `*` | 4.5–6.5 | **2.6–4.5** |
-| Multi `*` | **54** | 66 |
-| Backtracking miss | **7.8** | 11 |
+| Literal match | **3.5** | 9.0 |
+| Prefix `*` | **6.0** | 8.9 |
+| Suffix `*` | **5.8** | 8.9 |
+| Infix `*` | **10.7** | 13.3 |
+| Unicode `?` | **27.1** | 51.4 |
+| Multi `*` | **45.8** | 403.0 |
+| Backtracking miss | 15.7 | **5.9** |
 
-Compile cost itself is much lower for redglob (roughly **30–150 ns** and 1–2 allocs vs gobwas **500–2200 ns** and dozens of allocs), so redglob wins when patterns are created often or only matched a few times.
+Across the common cases, compilation costs **50–291 ns** and 1–5 allocs for redglob versus **626–1665 ns** and 9–31 allocs for gobwas. Lower compilation cost favors redglob when patterns are created often or only matched a few times.
 
 ### Long multi-segment input (~512 B padding)
 
 | | redglob one-shot | tidwall | redglob compiled | gobwas compiled | doublestar |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `start*middle*end` hit | **56** | 2368 | **25** | 26 | 2553 |
-| miss (`*missing*`) | **66** | 4761 | 33 | **27** | 2579 |
+| `start*middle*end` hit | 80 | 3551 | **38** | 188 | 4405 |
+| miss (`*missing*`) | 93 | 6769 | **54** | 116 | 4265 |
 
-Literal segment search keeps redglob in the tens of nanoseconds while naive backtracking matchers fall into the microseconds.
+In these cases, redglob stays below 100 ns, gobwas takes 116–188 ns, and tidwall and doublestar take several microseconds.
 
 ### Case-insensitive ASCII (`MatchFold` / tidwall `MatchNoCase`)
 
 | Input size | redglob | redglob compiled | tidwall |
 | ---: | ---: | ---: | ---: |
-| short key (`customer:*:profile`) | **50** | **29** | 57 |
-| 32 B literal | **79** | **46** | 88 |
-| 256 B literal | **596** | **342** | 643 |
-| 4096 B literal | **9334** | **5297** | 10184 |
+| short key (`customer:*:profile`) | 58 | **35** | 92 |
+| 32 B literal | 85 | **49** | 133 |
+| 256 B literal | 698 | **369** | 1056 |
+| 4096 B literal | 10704 | **5655** | 16951 |
 
 ### Experimental SIMD (Go 1.27+)
 
 With a Go 1.27+ toolchain and `GOEXPERIMENT=simd`, long ASCII case-insensitive literal/prefix comparisons can use Go's experimental portable `simd` package. The threshold is 64 bytes; shorter and non-ASCII inputs stay on the scalar path.
 
-Same machine, Go 1.27rc2, scalar vs `GOEXPERIMENT=simd` (benchstat, `-count 5`):
+Apple M1 Pro (`darwin/arm64`), Go 1.27rc2, scalar vs `GOEXPERIMENT=simd` (benchstat, `-count 5`):
 
 | Benchmark | Scalar | SIMD | Δ |
 | --- | ---: | ---: | ---: |
