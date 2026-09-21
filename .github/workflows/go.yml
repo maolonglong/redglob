@@ -100,7 +100,7 @@ jobs:
         run: go test -shuffle=on -v -race -count=1 -coverprofile=coverage -covermode=atomic ./...
       - name: Upload coverage report to Codecov
         if: runner.os == 'Linux'
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: ./coverage
           disable_search: true
