@@ -387,13 +387,19 @@ func TestCompile(t *testing.T) {
 }
 
 func TestCompileBoundsInitialTokenCapacity(t *testing.T) {
-	pattern := `\` + strings.Repeat("a", 4096)
+	literal := strings.Repeat("a", 4096)
+	pattern := `\` + literal
 	compiled := Compile(pattern)
-	if len(compiled.tokens) != 1 || compiled.tokens[0].kind != tokenLiteralRun {
-		t.Fatalf("Compile(long escaped literal) tokens = %v, want one literal run", tokenKinds(compiled.tokens))
+	if !compiled.Match(literal) {
+		t.Fatal("Compile(long escaped literal).Match(exact) = false, want true")
 	}
-	if capacity := cap(compiled.tokens); capacity > 32 {
-		t.Fatalf("Compile(long escaped literal) token capacity = %d, want at most 32", capacity)
+	if compiled.Match(literal[:len(literal)-1] + "b") {
+		t.Fatal("Compile(long escaped literal).Match(mismatch) = true, want false")
+	}
+	if allocs := testing.AllocsPerRun(100, func() {
+		_ = Compile(pattern)
+	}); allocs > 3 {
+		t.Fatalf("Compile(long escaped literal) allocs = %v, want at most 3", allocs)
 	}
 }
 
@@ -484,87 +490,38 @@ func TestOptimizedSuffixEdgeCases(t *testing.T) {
 
 func TestCompiledTokenShapes(t *testing.T) {
 	cases := []struct {
-		pattern string
-		kinds   []tokenKind
-		// optional checks
-		anyN  int
-		lit   string
-		class bool
+		pattern   string
+		hit       string
+		miss      string
+		maxAllocs float64
 	}{
-		{"????", []tokenKind{tokenAnyN}, 4, "", false},
-		{"??", []tokenKind{tokenAnyN}, 2, "", false},
-		{"?", []tokenKind{tokenAny}, 0, "", false},
-		{"file-??.txt", []tokenKind{tokenLiteralRun, tokenAnyN, tokenLiteralRun}, 2, "file-", false},
-		{"hello", []tokenKind{}, 0, "", false}, // simple
-		{`hello\*world`, []tokenKind{tokenLiteralRun}, 0, "hello*world", false},
-		{"[a-z]", []tokenKind{tokenClass}, 0, "", true},
-		{"user:[0-9]*", []tokenKind{tokenLiteralRun, tokenClass, tokenStar}, 0, "user:", true},
-		{"a*b*c", []tokenKind{}, 0, "", false}, // literal-star fast path
+		{"????", "abcd", "abc", 2},
+		{"??", "ab", "a", 2},
+		{"?", "a", "ab", 2},
+		{"file-??.txt", "file-01.txt", "file-1.txt", 2},
+		{"hello", "hello", "world", 1},
+		{`hello\*world`, "hello*world", "helloXworld", 3},
+		{"[a-z]", "m", "9", 3},
+		{"user:[0-9]*", "user:7:admin", "user:a:admin", 3},
+		{"a*b*c", "axbxc", "axdxc", 1},
 	}
 	for _, tt := range cases {
+		checkMatchAPIs(t, tt.hit, tt.pattern, true)
+		checkMatchAPIs(t, tt.miss, tt.pattern, false)
+		checkMatchFoldAPIs(t, strings.ToUpper(tt.hit), tt.pattern, true)
+		checkMatchFoldAPIs(t, strings.ToUpper(tt.miss), tt.pattern, false)
+
 		p := Compile(tt.pattern)
-		if tt.pattern == "a*b*c" {
-			if !p.literalStars || len(p.tokens) != 0 {
-				t.Errorf("Compile(%q) did not use token-free literal-star path", tt.pattern)
-			}
-			continue
+		if allocs := testing.AllocsPerRun(100, func() {
+			_ = p.Match(tt.hit)
+			_ = p.MatchFold(tt.hit)
+		}); allocs != 0 {
+			t.Errorf("Compile(%q) match allocs = %v, want 0", tt.pattern, allocs)
 		}
-		if p.simple {
-			if len(tt.kinds) != 0 {
-				t.Errorf("Compile(%q) unexpectedly simple", tt.pattern)
-			}
-			continue
-		}
-		if len(p.tokens) != len(tt.kinds) {
-			t.Errorf("Compile(%q) tokens=%d kinds=%v, want %d %v", tt.pattern, len(p.tokens), tokenKinds(p.tokens), len(tt.kinds), tt.kinds)
-			continue
-		}
-		for i, k := range tt.kinds {
-			if p.tokens[i].kind != k {
-				t.Errorf("Compile(%q) token[%d]=%v, want %v (all=%v)", tt.pattern, i, p.tokens[i].kind, k, tokenKinds(p.tokens))
-			}
-		}
-		if tt.anyN > 0 {
-			found := false
-			for _, tok := range p.tokens {
-				if tok.kind == tokenAnyN && tok.count == tt.anyN {
-					found = true
-				}
-			}
-			if !found {
-				t.Errorf("Compile(%q) missing AnyN count=%d", tt.pattern, tt.anyN)
-			}
-		}
-		if tt.lit != "" {
-			found := false
-			for _, tok := range p.tokens {
-				if tok.kind == tokenLiteralRun && tok.lit == tt.lit {
-					found = true
-				}
-			}
-			if !found && len(tt.lit) != 1 {
-				// also accept if pattern fully became one run
-				if len(p.tokens) == 1 && p.tokens[0].kind == tokenLiteralRun && p.tokens[0].lit == tt.lit {
-					found = true
-				}
-			}
-			if !found {
-				t.Errorf("Compile(%q) missing literal run %q; tokens=%v", tt.pattern, tt.lit, dumpTokens(p.tokens))
-			}
-		}
-		if tt.class {
-			tok := p.tokens[0]
-			for _, t2 := range p.tokens {
-				if t2.kind == tokenClass {
-					tok = t2
-					break
-				}
-			}
-			if tok.kind != tokenClass {
-				t.Errorf("Compile(%q) missing class", tt.pattern)
-			} else if tt.pattern == "[a-z]" && !asciiBit(tok.class.bits, 'a') {
-				t.Errorf("Compile([a-z]) bitset missing 'a'")
-			}
+		if allocs := testing.AllocsPerRun(100, func() {
+			_ = Compile(tt.pattern)
+		}); allocs > tt.maxAllocs {
+			t.Errorf("Compile(%q) compile allocs = %v, want <= %v", tt.pattern, allocs, tt.maxAllocs)
 		}
 	}
 }
@@ -644,22 +601,6 @@ func TestShortLiteralFoldSearch(t *testing.T) {
 	} {
 		checkMatchFoldAPIs(t, tt.str, tt.pattern, tt.want)
 	}
-}
-
-func tokenKinds(tokens []token) []tokenKind {
-	out := make([]tokenKind, len(tokens))
-	for i, tok := range tokens {
-		out[i] = tok.kind
-	}
-	return out
-}
-
-func dumpTokens(tokens []token) string {
-	parts := make([]string, 0, len(tokens))
-	for _, tok := range tokens {
-		parts = append(parts, fmt.Sprintf("%d:%q/%d", tok.kind, tok.lit, tok.count))
-	}
-	return strings.Join(parts, ",")
 }
 
 func TestLiteralStarsFoldFastPath(t *testing.T) {

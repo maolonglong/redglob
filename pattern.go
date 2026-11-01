@@ -12,10 +12,14 @@ type Pattern struct {
 	tokens       []token
 	prefix       string
 	suffix       string
+	middle       string
+	minLen       int
+	lastStar     int
 	valid        bool
 	simple       bool
 	hasStar      bool
 	literalStars bool
+	singleMiddle bool
 }
 
 type token struct {
@@ -54,30 +58,33 @@ type charRange struct {
 // Compile parses pattern for repeated matching. Invalid patterns compile to a
 // Pattern that never matches, consistent with Match's existing behavior.
 func Compile(pattern string) *Pattern {
-	p := &Pattern{valid: true}
-	if p.prefix, p.suffix, p.hasStar, p.simple = splitSimplePattern(pattern); p.simple {
-		return p
-	}
-	if isLiteralStarsPattern(pattern) {
-		p.literalStars = true
-		p.prefix = pattern
+	p := &Pattern{valid: true, lastStar: -1}
+	if p.classifySimpleOrLiteralStars(pattern) {
 		return p
 	}
 	// Most patterns compile to only a few tokens. Keep the initial allocation
 	// bounded so a long literal does not retain a token array many times larger
 	// than the pattern itself.
 	p.tokens = make([]token, 0, min(len(pattern)/2+1, 32))
+	litStart, litEnd := -1, -1
 	var litBuf []byte
 	flushLit := func() {
-		if len(litBuf) == 0 {
+		var lit string
+		if len(litBuf) > 0 {
+			lit = b2s(litBuf)
+			litBuf = nil
+		} else if litStart >= 0 {
+			lit = pattern[litStart:litEnd]
+		} else {
 			return
 		}
-		if len(litBuf) == 1 && litBuf[0] < utf8.RuneSelf {
+		litStart, litEnd = -1, -1
+		if len(lit) == 1 && lit[0] < utf8.RuneSelf {
 			p.tokens = append(p.tokens, token{
 				kind: tokenLiteral,
-				char: rune(litBuf[0]),
+				char: rune(lit[0]),
 			})
-		} else if r, n := utf8.DecodeRune(litBuf); n == len(litBuf) && r != utf8.RuneError {
+		} else if r, n := utf8.DecodeRuneInString(lit); n == len(lit) && r != utf8.RuneError {
 			// Single well-formed non-ASCII rune.
 			p.tokens = append(p.tokens, token{
 				kind: tokenLiteral,
@@ -86,12 +93,11 @@ func Compile(pattern string) *Pattern {
 		} else {
 			p.tokens = append(p.tokens, token{
 				kind: tokenLiteralRun,
-				lit:  string(litBuf),
+				lit:  lit,
 			})
 		}
-		litBuf = litBuf[:0]
 	}
-	appendLiteral := func(char rune, raw string) {
+	appendLiteral := func(char rune, start, end int) {
 		// Both U+FFFD and invalid UTF-8 match by RuneError identity, not by
 		// encoding. Keep them out of byte-oriented literal runs.
 		if char == utf8.RuneError {
@@ -102,14 +108,25 @@ func Compile(pattern string) *Pattern {
 			})
 			return
 		}
-		litBuf = append(litBuf, raw...)
+		if len(litBuf) > 0 {
+			litBuf = append(litBuf, pattern[start:end]...)
+		} else if litStart < 0 {
+			litStart, litEnd = start, end
+		} else if start == litEnd {
+			litEnd = end
+		} else {
+			litBuf = make([]byte, 0, len(pattern)-litStart)
+			litBuf = append(litBuf, pattern[litStart:litEnd]...)
+			litBuf = append(litBuf, pattern[start:end]...)
+		}
 	}
-	for len(pattern) > 0 {
-		char, size := decodeRune(pattern)
+	for index := 0; index < len(pattern); {
+		char, size := decodeRune(pattern[index:])
 		switch char {
 		case '*':
 			flushLit()
 			if len(p.tokens) == 0 || p.tokens[len(p.tokens)-1].kind != tokenStar {
+				p.lastStar = len(p.tokens)
 				p.tokens = append(p.tokens, token{kind: tokenStar})
 			}
 		case '?':
@@ -124,24 +141,26 @@ func Compile(pattern string) *Pattern {
 		case '[':
 			flushLit()
 			var class token
-			class, pattern, p.valid = compileClass(pattern[size:])
+			var rest string
+			class, rest, p.valid = compileClass(pattern[index+size:])
 			if !p.valid {
 				return p
 			}
 			p.tokens = append(p.tokens, class)
+			index = len(pattern) - len(rest)
 			continue
 		case '\\':
-			pattern = pattern[size:]
-			if len(pattern) == 0 {
+			index += size
+			if index == len(pattern) {
 				p.valid = false
 				return p
 			}
-			char, size = decodeRune(pattern)
-			appendLiteral(char, pattern[:size])
+			char, size = decodeRune(pattern[index:])
+			appendLiteral(char, index, index+size)
 		default:
-			appendLiteral(char, pattern[:size])
+			appendLiteral(char, index, index+size)
 		}
-		pattern = pattern[size:]
+		index += size
 	}
 	flushLit()
 	return p
@@ -301,15 +320,30 @@ func (p *Pattern) match(str string, fold bool) bool {
 	}
 	if p.literalStars {
 		if fold {
-			return matchLiteralStarsValidFold(str, p.prefix)
+			return matchLiteralStarsCompiledFold(str, p.prefix, p.middle, p.suffix, p.singleMiddle)
 		}
-		return matchLiteralStarsValid(str, p.prefix)
+		if len(str) < p.minLen || !strings.HasPrefix(str, p.prefix) || !strings.HasSuffix(str, p.suffix) {
+			return false
+		}
+		if len(p.middle) == 0 {
+			return true
+		}
+		str = str[len(p.prefix) : len(str)-len(p.suffix)]
+		if p.singleMiddle {
+			return indexCaseSensitive(str, p.middle) >= 0
+		}
+		return matchMiddleLiterals(str, p.middle)
+	}
+	if p.lastStar < 0 {
+		return p.matchNoStar(str, fold)
 	}
 	tokens := p.tokens
-	var suffixMatches bool
-	str, tokens, suffixMatches = p.trimPatternSuffix(str, tokens, fold)
-	if !suffixMatches {
-		return false
+	if p.lastStar < len(tokens)-1 {
+		var suffixMatches bool
+		str, tokens, suffixMatches = p.trimPatternSuffix(str, tokens, fold)
+		if !suffixMatches {
+			return false
+		}
 	}
 	tokenIndex, stringIndex := 0, 0
 	starToken, starString, starLiteral := -1, 0, -1
@@ -338,11 +372,12 @@ func (p *Pattern) match(str string, fold bool) bool {
 				continue
 			case tokenAnyN:
 				next, ok := consumeAnyN(str, stringIndex, tok.count)
-				if ok {
-					tokenIndex++
-					stringIndex = next
-					continue
+				if !ok {
+					return false
 				}
+				tokenIndex++
+				stringIndex = next
+				continue
 			case tokenLiteralRun:
 				next, ok := consumeLiteralRun(str, stringIndex, tok.lit, fold)
 				if ok {
@@ -353,7 +388,7 @@ func (p *Pattern) match(str string, fold bool) bool {
 			default:
 				if stringIndex < len(str) {
 					char, size := decodeRune(str[stringIndex:])
-					if p.tokenMatches(tok, char, fold) {
+					if tok.matches(char, fold) {
 						tokenIndex++
 						stringIndex += size
 						continue
@@ -420,15 +455,39 @@ func consumeLiteralRun(str string, offset int, lit string, fold bool) (int, bool
 	return offset + end, true
 }
 
-func (p *Pattern) trimPatternSuffix(str string, tokens []token, fold bool) (string, []token, bool) {
-	starIndex := len(tokens) - 1
-	for starIndex >= 0 && tokens[starIndex].kind != tokenStar {
-		starIndex--
+func (p *Pattern) matchNoStar(str string, fold bool) bool {
+	stringIndex := 0
+	for i := range p.tokens {
+		tok := &p.tokens[i]
+		switch tok.kind {
+		case tokenAnyN:
+			next, ok := consumeAnyN(str, stringIndex, tok.count)
+			if !ok {
+				return false
+			}
+			stringIndex = next
+		case tokenLiteralRun:
+			next, ok := consumeLiteralRun(str, stringIndex, tok.lit, fold)
+			if !ok {
+				return false
+			}
+			stringIndex = next
+		default:
+			if stringIndex >= len(str) {
+				return false
+			}
+			char, size := decodeRune(str[stringIndex:])
+			if !tok.matches(char, fold) {
+				return false
+			}
+			stringIndex += size
+		}
 	}
-	if starIndex < 0 || starIndex == len(tokens)-1 {
-		return str, tokens, true
-	}
+	return stringIndex == len(str)
+}
 
+func (p *Pattern) trimPatternSuffix(str string, tokens []token, fold bool) (string, []token, bool) {
+	starIndex := p.lastStar
 	end := len(str)
 	for tokenIndex := len(tokens) - 1; tokenIndex > starIndex; tokenIndex-- {
 		tok := &tokens[tokenIndex]
@@ -450,7 +509,7 @@ func (p *Pattern) trimPatternSuffix(str string, tokens []token, fold bool) (stri
 				return str, tokens, false
 			}
 			char, size := utf8.DecodeLastRuneInString(str[:end])
-			if !p.tokenMatches(tok, char, fold) {
+			if !tok.matches(char, fold) {
 				return str, tokens, false
 			}
 			end -= size
@@ -488,396 +547,40 @@ func consumeLiteralRunSuffix(str string, end int, lit string, fold bool) (int, b
 	return start, true
 }
 
-func splitSimplePattern(pattern string) (prefix, suffix string, hasStar, ok bool) {
-	starStart, starEnd := -1, -1
-	for index, char := range pattern {
-		switch char {
-		case utf8.RuneError, '?', '[', '\\':
-			return "", "", false, false
-		case '*':
-			if starStart < 0 {
-				starStart = index
-			} else if index != starEnd {
-				return "", "", false, false
-			}
-			starEnd = index + 1
-		}
-	}
-	if starStart < 0 {
-		return pattern, "", false, true
-	}
-	return pattern[:starStart], pattern[starEnd:], true, true
-}
-
-func splitFixedSuffix(pattern string) (starEnd int, suffix string, ok bool) {
-	lastStar := strings.LastIndexByte(pattern, '*')
-	if lastStar < 0 || lastStar == len(pattern)-1 {
-		return 0, "", false
-	}
-	for _, char := range pattern {
-		switch char {
-		case utf8.RuneError, '?', '[', '\\':
-			return 0, "", false
-		}
-	}
-	return lastStar + 1, pattern[lastStar+1:], true
-}
-
-func matchLiteralStars(str, pattern string) (bool, bool) {
-	if !isLiteralStarsPattern(pattern) {
-		return false, false
-	}
-	return matchLiteralStarsValid(str, pattern), true
-}
-
-func matchLiteralStarsFold(str, pattern string) (bool, bool) {
-	if !isLiteralStarsPattern(pattern) {
-		return false, false
-	}
-	return matchLiteralStarsValidFold(str, pattern), true
-}
-
-func isLiteralStarsPattern(pattern string) bool {
-	firstStar := strings.IndexByte(pattern, '*')
-	lastStar := strings.LastIndexByte(pattern, '*')
-	if firstStar < 0 || firstStar == lastStar {
+func (p *Pattern) classifySimpleOrLiteralStars(pattern string) bool {
+	firstStar, firstStarEnd, lastStar, lastStarEnd, starRuns, stars, specialIndex := scanPattern(pattern)
+	if specialIndex >= 0 {
 		return false
 	}
-	for _, char := range pattern {
-		switch char {
-		case utf8.RuneError, '?', '[', '\\':
-			return false
-		}
+	if starRuns == 0 {
+		p.prefix = pattern
+		p.simple = true
+		return true
 	}
+	if starRuns == 1 {
+		p.prefix = pattern[:firstStar]
+		p.suffix = pattern[firstStarEnd:]
+		p.hasStar = true
+		p.simple = true
+		return true
+	}
+	p.prefix = pattern[:firstStar]
+	p.middle = pattern[firstStarEnd:lastStar]
+	p.suffix = pattern[lastStarEnd:]
+	p.minLen = len(pattern) - stars
+	p.singleMiddle = starRuns == 2
+	p.literalStars = true
 	return true
 }
 
-func matchLiteralStarsValid(str, pattern string) bool {
-	firstStar := strings.IndexByte(pattern, '*')
-	lastStar := strings.LastIndexByte(pattern, '*')
-	prefix, suffix := pattern[:firstStar], pattern[lastStar+1:]
-	if len(str) < len(prefix)+len(suffix) ||
-		!strings.HasPrefix(str, prefix) || !strings.HasSuffix(str, suffix) {
-		return false
+func (c *compiledClass) matches(char rune, fold bool) bool {
+	if fold {
+		return c.matchesFold(char) != c.negated
 	}
-	str = str[len(prefix) : len(str)-len(suffix)]
-	pattern = pattern[firstStar+1 : lastStar]
-	for len(pattern) > 0 {
-		if pattern[0] == '*' {
-			pattern = pattern[1:]
-			continue
-		}
-		star := strings.IndexByte(pattern, '*')
-		if star < 0 {
-			star = len(pattern)
-		}
-		literal := pattern[:star]
-		index := strings.Index(str, literal)
-		if index < 0 {
-			return false
-		}
-		str = str[index+len(literal):]
-		pattern = pattern[star:]
-	}
-	return true
+	return c.contains(char) != c.negated
 }
 
-func matchLiteralStarsValidFold(str, pattern string) bool {
-	firstStar := strings.IndexByte(pattern, '*')
-	lastStar := strings.LastIndexByte(pattern, '*')
-	prefix, suffix := pattern[:firstStar], pattern[lastStar+1:]
-
-	prefixEnd := 0
-	if len(prefix) > 0 {
-		var matches bool
-		prefixEnd, matches = matchPrefixFold(str, prefix)
-		if !matches {
-			return false
-		}
-	}
-	suffixStart := len(str)
-	if len(suffix) > 0 {
-		var matches bool
-		suffixStart, matches = matchSuffixFold(str, suffix)
-		if !matches {
-			return false
-		}
-	}
-	if prefixEnd > suffixStart {
-		return false
-	}
-
-	str = str[prefixEnd:suffixStart]
-	pattern = pattern[firstStar+1 : lastStar]
-	for len(pattern) > 0 {
-		if pattern[0] == '*' {
-			pattern = pattern[1:]
-			continue
-		}
-		star := strings.IndexByte(pattern, '*')
-		if star < 0 {
-			star = len(pattern)
-		}
-		literal := pattern[:star]
-		index, width := indexFold(str, literal)
-		if index < 0 {
-			return false
-		}
-		str = str[index+width:]
-		pattern = pattern[star:]
-	}
-	return true
-}
-
-// indexFold reports the byte index of the first case-insensitive occurrence of
-// literal in str, and the number of bytes matched in str. It returns -1, 0 if
-// literal is not found.
-//
-// Pure-ASCII inputs use a byte-oriented search. Haystacks containing non-ASCII
-// runes require a rune walk so the result is the first folded occurrence, not
-// merely the first ASCII occurrence after it (for example, K before K).
-func indexFold(str, literal string) (int, int) {
-	if len(literal) == 0 {
-		return 0, 0
-	}
-	// Immediate hits need no whole-haystack ASCII or frequency scan.
-	if width, matches := matchPrefixFold(str, literal); matches {
-		return 0, width
-	}
-	if isASCII(literal) && isASCII(str) {
-		if index := indexASCIIFold(str, literal); index >= 0 {
-			return index, len(literal)
-		}
-		return -1, 0
-	}
-	for offset := 0; offset <= len(str); {
-		if width, matches := matchPrefixFold(str[offset:], literal); matches {
-			return offset, width
-		}
-		if offset == len(str) {
-			break
-		}
-		_, size := decodeRune(str[offset:])
-		offset += size
-	}
-	return -1, 0
-}
-
-// indexASCIIFold finds literal in an ASCII haystack, ignoring ASCII case. It
-// anchors comparisons on the least frequent literal byte in the haystack so a
-// repetitive prefix does not repeatedly rescan the whole literal.
-func indexASCIIFold(str, literal string) int {
-	n, m := len(str), len(literal)
-	if m > n {
-		return -1
-	}
-	if m < 64 {
-		return indexASCIIFoldShort(str, literal)
-	}
-
-	var frequencies [utf8.RuneSelf]int
-	for index := range len(str) {
-		frequencies[lowerASCIIByte(str[index])]++
-	}
-	anchor := 0
-	anchorFrequency := n + 1
-	for index := range len(literal) {
-		frequency := frequencies[lowerASCIIByte(literal[index])]
-		if frequency < anchorFrequency {
-			anchor = index
-			anchorFrequency = frequency
-		}
-	}
-	anchorByte := lowerASCIIByte(literal[anchor])
-	limit := n - m
-	for start := 0; start <= limit; start++ {
-		if lowerASCIIByte(str[start+anchor]) == anchorByte && equalASCIIFold(str[start:start+m], literal) {
-			return start
-		}
-	}
-	return -1
-}
-
-func indexASCIIFoldShort(str, literal string) int {
-	n, m := len(str), len(literal)
-	first := literal[0]
-	firstLower := lowerASCIIByte(first)
-	letter := firstLower >= 'a' && firstLower <= 'z'
-	limit := n - m
-	for index := 0; index <= limit; {
-		if letter {
-			// Search both cases in one pass; separate searches can repeatedly
-			// scan the entire suffix when one case is absent.
-			for index <= limit && lowerASCIIByte(str[index]) != firstLower {
-				index++
-			}
-		} else {
-			relative := strings.IndexByte(str[index:], first)
-			if relative < 0 {
-				return -1
-			}
-			index += relative
-		}
-		if index > limit {
-			return -1
-		}
-		if equalASCIIFold(str[index:index+m], literal) {
-			return index
-		}
-		index++
-	}
-	return -1
-}
-
-func equalASCIIFold(str, literal string) bool {
-	for i := 0; i < len(literal); i++ {
-		sb := str[i]
-		lb := literal[i]
-		if sb == lb {
-			continue
-		}
-		if lowerASCIIByte(sb) != lowerASCIIByte(lb) {
-			return false
-		}
-	}
-	return true
-}
-
-func isASCII(s string) bool {
-	// Check 8 bytes at a time: any high bit means a non-ASCII byte.
-	i := 0
-	n := len(s)
-	for ; i+8 <= n; i += 8 {
-		v := uint64(s[i]) |
-			uint64(s[i+1])<<8 |
-			uint64(s[i+2])<<16 |
-			uint64(s[i+3])<<24 |
-			uint64(s[i+4])<<32 |
-			uint64(s[i+5])<<40 |
-			uint64(s[i+6])<<48 |
-			uint64(s[i+7])<<56
-		if v&0x8080808080808080 != 0 {
-			return false
-		}
-	}
-	for ; i < n; i++ {
-		if s[i] >= utf8.RuneSelf {
-			return false
-		}
-	}
-	return true
-}
-
-func matchSimple(str, prefix, suffix string) bool {
-	if len(prefix) == 0 {
-		return strings.HasSuffix(str, suffix)
-	}
-	if len(suffix) == 0 {
-		return strings.HasPrefix(str, prefix)
-	}
-	return len(str) >= len(prefix)+len(suffix) &&
-		strings.HasPrefix(str, prefix) && strings.HasSuffix(str, suffix)
-}
-
-func matchSimpleFold(str, prefix, suffix string) bool {
-	prefixEnd := 0
-	if len(prefix) > 0 {
-		var matches bool
-		prefixEnd, matches = matchPrefixFold(str, prefix)
-		if !matches {
-			return false
-		}
-	}
-	suffixStart := len(str)
-	if len(suffix) > 0 {
-		var matches bool
-		suffixStart, matches = matchSuffixFold(str, suffix)
-		if !matches {
-			return false
-		}
-	}
-	return prefixEnd <= suffixStart
-}
-
-func matchASCIIFoldPrefixScalar(str, pattern string) (int, bool) {
-	consumed := 0
-	for consumed < len(str) && consumed < len(pattern) &&
-		str[consumed] < utf8.RuneSelf && pattern[consumed] < utf8.RuneSelf {
-		if lowerASCIIRune(rune(str[consumed])) != lowerASCIIRune(rune(pattern[consumed])) {
-			return 0, false
-		}
-		consumed++
-	}
-	return consumed, true
-}
-
-func matchLiteralFold(str, literal string) bool {
-	consumed, matches := matchASCIIFoldPrefix(str, literal)
-	if !matches {
-		return false
-	}
-	str = str[consumed:]
-	literal = literal[consumed:]
-	for len(str) > 0 && len(literal) > 0 {
-		strChar, strSize := decodeRune(str)
-		literalChar, literalSize := decodeRune(literal)
-		if !runesEqualFold(strChar, literalChar) {
-			return false
-		}
-		str = str[strSize:]
-		literal = literal[literalSize:]
-	}
-	return len(str) == 0 && len(literal) == 0
-}
-
-func matchPrefixFold(str, prefix string) (int, bool) {
-	consumed, matches := matchASCIIFoldPrefix(str, prefix)
-	if !matches {
-		return 0, false
-	}
-	str = str[consumed:]
-	prefix = prefix[consumed:]
-	for len(prefix) > 0 {
-		if len(str) == 0 {
-			return 0, false
-		}
-		strChar, strSize := decodeRune(str)
-		prefixChar, prefixSize := decodeRune(prefix)
-		if !runesEqualFold(strChar, prefixChar) {
-			return 0, false
-		}
-		str = str[strSize:]
-		prefix = prefix[prefixSize:]
-		consumed += strSize
-	}
-	return consumed, true
-}
-
-func matchSuffixFold(str, suffix string) (int, bool) {
-	remaining := len(str)
-	for len(suffix) > 0 && remaining > 0 && str[remaining-1] < utf8.RuneSelf && suffix[len(suffix)-1] < utf8.RuneSelf {
-		if lowerASCIIRune(rune(str[remaining-1])) != lowerASCIIRune(rune(suffix[len(suffix)-1])) {
-			return 0, false
-		}
-		remaining--
-		suffix = suffix[:len(suffix)-1]
-	}
-	for len(suffix) > 0 {
-		if remaining == 0 {
-			return 0, false
-		}
-		strChar, strSize := utf8.DecodeLastRuneInString(str[:remaining])
-		suffixChar, suffixSize := utf8.DecodeLastRuneInString(suffix)
-		if !runesEqualFold(strChar, suffixChar) {
-			return 0, false
-		}
-		remaining -= strSize
-		suffix = suffix[:len(suffix)-suffixSize]
-	}
-	return remaining, true
-}
-
-func (p *Pattern) tokenMatches(t *token, char rune, fold bool) bool {
+func (t *token) matches(char rune, fold bool) bool {
 	switch t.kind {
 	case tokenLiteral:
 		if fold {
@@ -887,14 +590,7 @@ func (p *Pattern) tokenMatches(t *token, char rune, fold bool) bool {
 	case tokenAny:
 		return true
 	case tokenClass:
-		class := t.class
-		matched := false
-		if fold {
-			matched = class.matchesFold(char)
-		} else {
-			matched = class.contains(char)
-		}
-		return matched != class.negated
+		return t.class.matches(char, fold)
 	default:
 		return false
 	}

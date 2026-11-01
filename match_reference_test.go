@@ -41,11 +41,13 @@ func stringmatchImpl(str, pattern string, nocase bool, skipLongerMatches *bool) 
 			return false
 		case '?':
 			if ss == 0 {
+				*skipLongerMatches = true
 				return false
 			}
 			str = str[ss:]
 		case '[':
 			if ss == 0 || len(pattern) < 3 {
+				*skipLongerMatches = true
 				return false
 			}
 			pattern = pattern[1:]
@@ -56,11 +58,13 @@ func stringmatchImpl(str, pattern string, nocase bool, skipLongerMatches *bool) 
 			matched := false
 			for {
 				if len(pattern) == 0 {
+					*skipLongerMatches = true
 					return false
 				}
 				pc, ps = decodeRune(pattern)
 				if pc == '\\' {
 					if len(pattern) == 1 {
+						*skipLongerMatches = true
 						return false
 					}
 					pattern = pattern[ps:]
@@ -97,6 +101,7 @@ func stringmatchImpl(str, pattern string, nocase bool, skipLongerMatches *bool) 
 			str = str[ss:]
 		case '\\':
 			if len(pattern) == 1 {
+				*skipLongerMatches = true
 				return false
 			}
 			pattern = pattern[1:]
