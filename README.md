@@ -99,7 +99,7 @@ The doublestar benchmarks use `MatchUnvalidated`, which skips part of pattern va
 
 ## Performance
 
-Numbers below are median `ns/op` from the isolated [`benchmarks`](benchmarks) module in an Amp orb with an Intel Xeon @ 2.60 GHz (2 vCPUs, `linux/amd64`), Go 1.26.5, `CGO_ENABLED=0`, `-count 5`. Dependency versions: gobwas/glob v1.0.0, tidwall/match v1.2.0, doublestar/v4 v4.10.0. Results are specific to this environment; the experimental SIMD section lists its own environment. Re-run anytime:
+Numbers below are median `ns/op` from the isolated [`benchmarks`](benchmarks) module in an Amp orb with an Intel Xeon @ 2.60 GHz (2 vCPUs, `linux/amd64`), Go 1.26.5, `CGO_ENABLED=0`, `-count 5`. Dependency versions: gobwas/glob v1.1.0, tidwall/match v1.2.0, doublestar/v4 v4.10.4. Results are specific to this environment; the experimental SIMD section lists its own environment. Re-run anytime:
 
 ```sh
 cd benchmarks

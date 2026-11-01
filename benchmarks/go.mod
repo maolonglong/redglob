@@ -3,8 +3,8 @@ module github.com/maolonglong/redglob/benchmarks
 go 1.26.0
 
 require (
-	github.com/bmatcuk/doublestar/v4 v4.10.3
-	github.com/gobwas/glob v1.0.0
+	github.com/bmatcuk/doublestar/v4 v4.10.4
+	github.com/gobwas/glob v1.1.0
 	github.com/maolonglong/redglob v0.0.0
 	github.com/tidwall/match v1.2.0
 )
